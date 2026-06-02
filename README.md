@@ -18,6 +18,7 @@ See the [crate README](./crates/claude_code_ide/README.md). Upstreaming via
 [![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
 [![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
 [![Clones](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vitaly-andr/zed/traffic-data/badge.json)](https://github.com/vitaly-andr/zed/graphs/traffic)
+[![Reddit](https://img.shields.io/badge/reddit-discussion-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/ZedEditor/comments/1tukeq5/native_claude_code_ide_integration_for_zed_claude/)
 
 Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
 

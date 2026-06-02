@@ -2,7 +2,7 @@ name: Track clone traffic
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # каждый понедельник 06:00 UTC
+    - cron: "0 6 * * *"   # каждый день 06:00 UTC
   workflow_dispatch:
 
 permissions:

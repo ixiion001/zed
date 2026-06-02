@@ -1,17 +1,15 @@
 ## This fork
 
-Fork of [zed-industries/zed](https://github.com/zed-industries/zed) experimenting with native
-**Claude Code IDE integration** (crate `claude_code_ide`). The work lives on the
-[`claude-code-ide-integration`](https://github.com/vitaly-andr/zed/tree/claude-code-ide-integration)
-branch — `main` tracks upstream and does not include it. Prebuilt binaries on zed.dev do not include it
-either, so build from source:
+Fork of [zed-industries/zed](https://github.com/zed-industries/zed) with native
+**Claude Code IDE integration** (crate `claude_code_ide`). Prebuilt binaries on zed.dev do not include it,
+so build from source:
 
 ```sh
-git checkout claude-code-ide-integration
 cargo run --release
 ```
 
-See the [crate README](https://github.com/vitaly-andr/zed/blob/claude-code-ide-integration/crates/claude_code_ide/README.md).
+See the [crate README](./crates/claude_code_ide/README.md). Upstreaming via
+[zed-industries/zed#58300](https://github.com/zed-industries/zed/pull/58300).
 
 ---
 

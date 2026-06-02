@@ -1,0 +1,58 @@
+name: Track clone traffic
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # каждый понедельник 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and merge clone traffic
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/traffic/clones" > today.json
+
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir data && cd data
+          git init -q
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git fetch -q --depth=1 origin traffic-data 2>/dev/null; then
+            git checkout -q FETCH_HEAD
+          else
+            git checkout -q --orphan traffic-data
+            git rm -rfq . 2>/dev/null || true
+            echo '{}' > clones.json
+          fi
+
+          mv ../today.json today.json
+          jq -s '
+            (.[0] // {}) as $hist
+            | reduce (.[1].clones[]) as $d ($hist;
+                .[$d.timestamp] as $old
+                | .[$d.timestamp] =
+                    (if $old == null
+                       then {count: $d.count, uniques: $d.uniques}
+                       else {count:   ([$old.count,   $d.count]   | max),
+                             uniques: ([$old.uniques, $d.uniques] | max)}
+                     end))
+          ' clones.json today.json > merged.json
+          mv merged.json clones.json
+          rm -f today.json
+
+          git add clones.json
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -q -m "Update clone traffic ($(date -u +%Y-%m-%d))"
+            git push -q origin HEAD:traffic-data
+          fi

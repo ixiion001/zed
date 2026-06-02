@@ -14,7 +14,8 @@ jobs:
     steps:
       - name: Fetch and merge clone traffic
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -25,7 +26,7 @@ jobs:
 
           mkdir data && cd data
           git init -q
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          git remote add origin "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git"
           if git fetch -q --depth=1 origin traffic-data 2>/dev/null; then
             git checkout -q FETCH_HEAD
           else

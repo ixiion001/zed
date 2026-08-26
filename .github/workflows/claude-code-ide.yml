@@ -1,0 +1,48 @@
+# Validation for the `claude_code_ide` crate on all three desktop platforms.
+#
+# The crate is only useful if it behaves identically everywhere, and the Windows
+# fixes it carries touch path and URI handling shared with macOS and Linux, so
+# every platform builds the crate and runs its unit tests.
+name: claude_code_ide
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Zed's own CI uses this for the system libraries gpui links against.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: ./script/linux
+
+      # rust-toolchain.toml pins the compiler; this just makes the install explicit.
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: claude-code-ide-${{ matrix.os }}
+          cache-on-failure: true
+
+      - name: Build crate
+        run: cargo build --package claude_code_ide
+
+      - name: Run unit tests
+        run: cargo test --package claude_code_ide -- --nocapture

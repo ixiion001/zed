@@ -28,6 +28,12 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The HTTP header the CLI must send, carrying the token from the lock file.
 pub const AUTH_HEADER: &str = "x-claude-code-ide-authorization";
 
+/// The subprotocol header the CLI offers during the handshake. RFC 6455 requires
+/// a server accepting a subprotocol offer to name its choice in the response, and
+/// a client whose offer goes unanswered must fail the connection. The CLI offers
+/// `mcp`, so without echoing it back the session drops right after `101`.
+const SUBPROTOCOL_HEADER: &str = "sec-websocket-protocol";
+
 /// JSON-RPC 2.0 standard error codes (see the spec, section 5.1).
 pub mod error_codes {
     pub const PARSE_ERROR: i32 = -32700;
@@ -107,9 +113,20 @@ where
     // The handshake callback runs during the HTTP upgrade. We reject the
     // connection unless it presents the exact token we wrote into the lock file,
     // so only the CLI that read our lock file (same user) can connect.
-    let authorize = move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+    let authorize = move |request: &Request, mut response: Response| -> Result<Response, ErrorResponse> {
         let presented = request.headers().get(AUTH_HEADER).map(|value| value.as_bytes());
         if presented == Some(auth_token.as_bytes()) {
+            // Echo the first subprotocol the client offered, or its handshake
+            // fails; see `SUBPROTOCOL_HEADER`.
+            if let Some(offered) = request
+                .headers()
+                .get(SUBPROTOCOL_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(',').map(str::trim).find(|name| !name.is_empty()))
+                .and_then(|name| http::HeaderValue::from_str(name).ok())
+            {
+                response.headers_mut().insert(SUBPROTOCOL_HEADER, offered);
+            }
             Ok(response)
         } else {
             let denied = http::Response::builder()

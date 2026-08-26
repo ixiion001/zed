@@ -6,10 +6,23 @@
 name: claude_code_ide
 
 on:
+  # Only re-validate every platform when the crate itself changes. Editing this
+  # workflow, docs, or anything else must not re-run jobs whose result is already
+  # known: they cost wall-clock, and on a private repo they would cost minutes.
   push:
     branches: ["**"]
+    paths:
+      - "crates/claude_code_ide/**"
   pull_request:
+    paths:
+      - "crates/claude_code_ide/**"
+  # Re-run a single platform after a CI-only fix, e.g. platforms: ["windows-latest"]
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: JSON array of runners
+        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+        required: false
 
 env:
   CARGO_TERM_COLOR: never
@@ -27,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event.inputs.platforms || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
 

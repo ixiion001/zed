@@ -8,7 +8,7 @@ use editor::{Editor, SplittableEditor};
 use gpui::{AnyWindowHandle, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use text::Point;
 use workspace::{OpenOptions, SaveIntent, Workspace};
 
@@ -69,7 +69,7 @@ impl WorkspaceDispatcher {
                         "success": true,
                         "text": text,
                         "filePath": path,
-                        "fileUrl": format!("file://{path}"),
+                        "fileUrl": file_uri(&path),
                         "selection": {
                             "start": { "line": cursor.start.row, "character": cursor.start.column },
                             "end": { "line": cursor.end.row, "character": cursor.end.column },
@@ -99,8 +99,7 @@ impl WorkspaceDispatcher {
         let folders = paths
             .iter()
             .map(|path| {
-                let name = path.rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
-                json!({ "name": name, "uri": format!("file://{path}"), "path": path })
+                json!({ "name": file_name(path), "uri": file_uri(path), "path": path })
             })
             .collect::<Vec<_>>();
         let root_path = paths.first().cloned().unwrap_or_default();
@@ -145,9 +144,9 @@ impl WorkspaceDispatcher {
                             .map(|language| language.name().to_string())
                             .unwrap_or_else(|| "plaintext".to_owned());
                         let line_count = buffer.text_snapshot().max_point().row + 1;
-                        let label = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                        let label = file_name(&path).to_owned();
                         Some(json!({
-                            "uri": format!("file://{path}"),
+                            "uri": file_uri(&path),
                             "fileName": path,
                             "label": label,
                             "languageId": language,
@@ -172,7 +171,7 @@ impl WorkspaceDispatcher {
         let target = arguments
             .get("uri")
             .and_then(Value::as_str)
-            .map(|uri| uri.strip_prefix("file://").unwrap_or(uri).to_owned());
+            .map(path_from_uri);
 
         let diagnostics = self
             .workspace
@@ -348,6 +347,56 @@ impl WorkspaceDispatcher {
     }
 }
 
+/// Formats an absolute path as a `file://` URI.
+///
+/// Windows needs more care than `format!("file://{path}")`: for `C:\dir\file`
+/// that yields `file://C:\dir\file`, where `C:` parses as the URI *authority*
+/// and backslashes are not separators, so the CLI cannot resolve it. Posix paths
+/// already begin with `/` and so supply the third slash themselves.
+fn file_uri(path: &str) -> String {
+    // Only rewrite separators on Windows: elsewhere `\` is a legal character in
+    // a file name, and replacing it would invent a directory boundary.
+    let path = if cfg!(windows) { path.replace('\\', "/") } else { path.to_owned() };
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    }
+}
+
+/// Converts a `file://` URI back to a native absolute path; the inverse of
+/// [`file_uri`]. Input that is not a URI is returned unchanged, because the CLI
+/// sometimes sends a bare path where the schema asks for a uri.
+fn path_from_uri(uri: &str) -> String {
+    let Some(path) = uri.strip_prefix("file://") else {
+        return uri.to_owned();
+    };
+    // `file:///C:/dir` strips to `/C:/dir`; drop the slash before a drive letter
+    // so the result compares equal to the path Zed reports for the same file.
+    let path = match path.strip_prefix('/') {
+        Some(rest) if starts_with_drive_letter(rest) => rest,
+        _ => path,
+    };
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_owned() }
+}
+
+/// Whether `path` starts with a Windows drive prefix such as `C:`.
+fn starts_with_drive_letter(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!((chars.next(), chars.next()), (Some(drive), Some(':')) if drive.is_ascii_alphabetic())
+}
+
+/// The final component of `path`, for display. [`Path`] splits on the platform's
+/// separators, so this handles `C:\dir\file` as well as `/dir/file`; splitting on
+/// `'/'` alone never divides a Windows path and returns the whole thing.
+fn file_name(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+}
+
 fn required_path_field(arguments: &Value, field: &str) -> Result<String, ProtocolError> {
     arguments
         .get(field)
@@ -508,4 +557,68 @@ impl Dispatcher for WorkspaceDispatcher {
 /// extensions do.
 fn mcp_text(payload: Value) -> Value {
     json!({ "content": [{ "type": "text", "text": payload.to_string() }] })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The path shape this platform actually produces; every conversion below is
+    /// checked against what Zed reports for a real file.
+    fn native_path() -> &'static str {
+        if cfg!(windows) { r"C:\Users\user\project" } else { "/home/user/project" }
+    }
+
+    #[test]
+    fn file_uri_keeps_the_posix_form() {
+        // An absolute posix path supplies the third slash itself, so this is the
+        // behaviour the crate already had everywhere except Windows.
+        assert_eq!(file_uri("/home/user/project"), "file:///home/user/project");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_uri_rewrites_windows_paths() {
+        // Three slashes (empty authority) and forward separators, or the CLI
+        // reads `C:` as the host and cannot resolve the file.
+        assert_eq!(file_uri(r"C:\Users\user\project"), "file:///C:/Users/user/project");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn file_uri_leaves_backslashes_alone_off_windows() {
+        // `\` is an ordinary character in a posix file name; rewriting it would
+        // invent a directory boundary that does not exist.
+        assert_eq!(file_uri(r"/home/user/we\ird.txt"), r"file:///home/user/we\ird.txt");
+    }
+
+    #[test]
+    fn path_from_uri_inverts_file_uri() {
+        let path = native_path();
+        assert_eq!(path_from_uri(&file_uri(path)), path);
+    }
+
+    #[test]
+    fn path_from_uri_passes_plain_paths_through() {
+        // The CLI sometimes sends a bare path where the schema says uri.
+        let path = native_path();
+        assert_eq!(path_from_uri(path), path);
+    }
+
+    #[test]
+    fn file_name_takes_the_last_component() {
+        assert_eq!(file_name("/home/user/project"), "project");
+        assert_eq!(file_name(native_path()), "project");
+        // A bare name, and a root with no component, both fall back to the input.
+        assert_eq!(file_name("project"), "project");
+        assert_eq!(file_name("/"), "/");
+    }
+
+    #[test]
+    fn starts_with_drive_letter_only_matches_a_drive() {
+        assert!(starts_with_drive_letter("C:/Users"));
+        assert!(starts_with_drive_letter("z:"));
+        assert!(!starts_with_drive_letter("/home"));
+        assert!(!starts_with_drive_letter("1:/nope"));
+    }
 }

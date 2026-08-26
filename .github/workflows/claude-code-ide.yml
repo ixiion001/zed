@@ -14,6 +14,10 @@ on:
 env:
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: 1
+  # Cargo's vendored libgit2 cannot check out the `pet` git dependency on
+  # Windows: some of its test fixtures exceed MAX_PATH. Shelling out to the git
+  # CLI honours `core.longpaths` and sidesteps it.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   test:
@@ -27,12 +31,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Must precede any cargo invocation, including the cache action's
+      # `cargo metadata`. See Zed's own Windows build troubleshooting.
+      - name: Enable long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force | Out-Null
+
       # Zed's own CI uses this for the system libraries gpui links against.
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: ./script/linux
 
-      # rust-toolchain.toml pins the compiler; this just makes the install explicit.
+      # rust-toolchain.toml pins the compiler; this just makes the version explicit.
       - name: Show toolchain
         run: rustc --version && cargo --version
 

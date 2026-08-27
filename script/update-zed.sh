@@ -50,8 +50,19 @@ done
 # names below are spelled out in full rather than matched by pattern: a rename
 # upstream then fails loudly here instead of silently finding nothing to do.
 
+# The asset names also fix an architecture. Nothing downstream would notice a
+# mismatch -- the download succeeds, the checksum verifies, the bundle installs,
+# and the only symptom is an exec-format error at launch -- so refuse here,
+# where the message can say what went wrong.
+
 case "$(uname -s)" in
     Darwin)
+        # Apple silicon only; uname -m spells that arm64, the triple aarch64.
+        if [ "$(uname -m)" != arm64 ]; then
+            echo "unsupported architecture: $(uname -m)." >&2
+            echo "Only Apple silicon (arm64) is published; build from source for Intel." >&2
+            exit 1
+        fi
         PLATFORM=macos
         ASSET=zed-claude-code-macos-aarch64.dmg
         INSTALL_DIR=${INSTALL_DIR:-/Applications}
@@ -59,6 +70,11 @@ case "$(uname -s)" in
         CLI="$APP/Contents/MacOS/cli"
         ;;
     Linux)
+        if [ "$(uname -m)" != x86_64 ]; then
+            echo "unsupported architecture: $(uname -m)." >&2
+            echo "Only x86_64 is published; build from source for aarch64." >&2
+            exit 1
+        fi
         PLATFORM=linux
         ASSET=zed-claude-code-linux-x86_64.tar.gz
         INSTALL_DIR=${INSTALL_DIR:-$HOME/.local}
@@ -160,7 +176,10 @@ release="$TMP/release.json"
 if [ "$PRE" -eq 1 ]; then
     "${CURL[@]}" "$API/releases?per_page=10" -o "$TMP/list.json"
     python3 -c 'import json,sys
-releases = [r for r in json.load(open(sys.argv[1])) if not r["draft"]]
+data = json.load(open(sys.argv[1]))
+# An error response is a JSON object, not the expected array; iterating it would
+# raise TypeError and bury the real message in a traceback.
+releases = [r for r in data if not r["draft"]] if isinstance(data, list) else []
 json.dump(releases[0] if releases else {}, open(sys.argv[2], "w"))' "$TMP/list.json" "$release"
 else
     # 404 is the normal state while only prereleases exist: nothing has been
@@ -183,6 +202,16 @@ fi
 
 "${CURL[@]}" "$API/commits/$tag" -o "$TMP/commit.json"
 commit=$(json "$TMP/commit.json" 'd.get("sha")')
+# An empty sha means the API answered with something other than a commit --
+# most often the unauthenticated rate limit, which is 60 requests an hour and
+# this run spends two or three. Left unchecked it compares equal to an empty
+# `installed` on a machine with nothing installed, and the script would report
+# "up to date" and exit 0 having installed nothing at all.
+if [ -z "$commit" ]; then
+    echo "could not resolve $tag to a commit; GitHub returned no sha." >&2
+    echo "(unauthenticated requests are capped at 60/hour -- try again later)" >&2
+    exit 1
+fi
 prerelease=$(json "$release" 'd.get("prerelease")')
 label="$tag"
 [ "$prerelease" = "True" ] && label="$tag (prerelease)"

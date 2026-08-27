@@ -66,7 +66,7 @@ $installed = Get-InstalledCommit
 # until the *next* update rather than the next run. Anything still open stays
 # put and gets collected later.
 if (-not $DryRun) {
-    Get-ChildItem $InstallDir -Filter 'zed.exe.old-*' -ErrorAction SilentlyContinue |
+    Get-ChildItem $InstallDir -Filter '*.old-*' -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
@@ -137,13 +137,39 @@ if ($expected -ne $actual) {
 Write-Host 'checksum    : OK'
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-# Windows refuses to overwrite a running .exe but does allow renaming one, so a
-# Zed that is still open gets moved aside rather than failing the update.
-if (Test-Path $exe) {
-    Rename-Item $exe "zed.exe.old-$(if ($installed) { $installed.Substring(0, 10) } else { 'unknown' })" -Force
+
+# Deliberately not `Expand-Archive -DestinationPath $InstallDir -Force`: that
+# deletes each existing file before writing its replacement, and dies on
+# anything the running editor holds open. OpenConsole.exe is a live process
+# whenever a terminal is open, and conpty.dll is loaded on demand — so the
+# failure is intermittent, which is the worst kind. It also fails *after*
+# removing earlier entries, leaving the install half-updated and unlaunchable.
+#
+# Stage the archive instead and move files in one at a time.
+$staging = Join-Path $temp 'staging'
+Expand-Archive $zip -DestinationPath $staging -Force
+
+$stamp = if ($installed) { $installed.Substring(0, 10) } else { 'unknown' }
+foreach ($file in Get-ChildItem $staging -File) {
+    $target = Join-Path $InstallDir $file.Name
+    # conpty.dll and OpenConsole.exe come from a pinned download and are usually
+    # identical between builds. Skipping them means the common update never has
+    # to fight a lock at all.
+    if ((Test-Path $target) -and (Get-Sha256 $target) -eq (Get-Sha256 $file.FullName)) {
+        continue
+    }
+    if (Test-Path $target) {
+        # A file that is open cannot be deleted or overwritten, but renaming one
+        # is usually permitted — that is how the running zed.exe gets replaced.
+        try {
+            Rename-Item $target "$($file.Name).old-$stamp" -Force -ErrorAction Stop
+        } catch {
+            throw "cannot replace $($file.Name): it is in use. Close Zed and run this again."
+        }
+    }
+    Move-Item $file.FullName $target -Force
 }
 
-Expand-Archive $zip -DestinationPath $InstallDir -Force
 Remove-Item $temp -Recurse -Force
 
 $now = (Get-Item $exe).VersionInfo.ProductVersion

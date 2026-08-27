@@ -23,12 +23,9 @@ and JetBrains extensions speak.
 
 ## Install
 
-Every release ships a `.sha256` beside each asset; verify with `sha256sum -c <asset>.sha256`
-(`shasum -a 256 -c` on macOS). The binaries are **unsigned** — the source is this repository at the
-commit named in the release, and can be rebuilt from it.
-
-> **Today only the Windows archive is published.** macOS and Linux are built and tested but land
-> with the next tag. See [Releases](../../releases).
+Download from [Releases](../../releases). Every release ships a `.sha256` beside each asset; verify
+with `sha256sum -c <asset>.sha256` (`shasum -a 256 -c` on macOS). The binaries are **unsigned** — the
+source is this repository at the commit named in the release, and can be rebuilt from it.
 
 **Windows** — unzip into `%LOCALAPPDATA%\Programs\ZedDev` and run `zed.exe` from there.
 `conpty.dll` and `OpenConsole.exe` must sit beside it or the integrated terminal will not open.

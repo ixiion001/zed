@@ -58,12 +58,18 @@ impl WorkspaceDispatcher {
                         .map(|path| path.to_string_lossy().into_owned())
                         .unwrap_or_default();
 
-                    let text: String = editor
-                        .buffer()
-                        .read(cx)
-                        .snapshot(cx)
+                    let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
+                    let text: String = buffer_snapshot
                         .text_for_range(cursor.start..cursor.end)
                         .collect();
+
+                    // `character` is a UTF-16 offset, as VS Code defines it and
+                    // the CLI expects, but `Point::column` counts UTF-8 bytes.
+                    // They agree only on ASCII lines; an accent, a CJK character
+                    // or an emoji earlier in the line shifts every column after
+                    // it and the CLI resolves the selection to the wrong span.
+                    let start = buffer_snapshot.point_to_point_utf16(cursor.start);
+                    let end = buffer_snapshot.point_to_point_utf16(cursor.end);
 
                     json!({
                         "success": true,
@@ -71,8 +77,8 @@ impl WorkspaceDispatcher {
                         "filePath": path,
                         "fileUrl": file_uri(&path),
                         "selection": {
-                            "start": { "line": cursor.start.row, "character": cursor.start.column },
-                            "end": { "line": cursor.end.row, "character": cursor.end.column },
+                            "start": { "line": start.row, "character": start.column },
+                            "end": { "line": end.row, "character": end.column },
                             "isEmpty": cursor.start == cursor.end,
                         }
                     })
@@ -357,11 +363,63 @@ fn file_uri(path: &str) -> String {
     // Only rewrite separators on Windows: elsewhere `\` is a legal character in
     // a file name, and replacing it would invent a directory boundary.
     let path = if cfg!(windows) { path.replace('\\', "/") } else { path.to_owned() };
+    let path = percent_encode_path(&path);
     if path.starts_with('/') {
         format!("file://{path}")
     } else {
         format!("file:///{path}")
     }
+}
+
+/// Percent-encodes everything in a path that is not legal unescaped in a URI
+/// path, per RFC 3986.
+///
+/// Without this a file called `what?.rs`, `a#b.rs` or `my notes.rs` produces a
+/// URI the CLI parses as having a query, a fragment, or simply a different name
+/// -- and since `getDiagnostics` filters by comparing the uri it is given
+/// against the ones we emit, an unencoded path silently matches nothing.
+///
+/// `/` stays a separator, and `:` is left alone so a Windows drive reads as
+/// `file:///C:/dir` rather than `file:///C%3A/dir`.
+fn percent_encode_path(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+/// Reverses [`percent_encode_path`]. A `%` that does not introduce two hex
+/// digits is kept as written, so a path we did not encode survives unchanged.
+fn percent_decode_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let decoded_byte = if bytes[index] == b'%' && index + 2 < bytes.len() {
+            std::str::from_utf8(&bytes[index + 1..index + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        } else {
+            None
+        };
+        match decoded_byte {
+            Some(byte) => {
+                decoded.push(byte);
+                index += 3;
+            }
+            None => {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// Converts a `file://` URI back to a native absolute path; the inverse of
@@ -371,6 +429,8 @@ fn path_from_uri(uri: &str) -> String {
     let Some(path) = uri.strip_prefix("file://") else {
         return uri.to_owned();
     };
+    let path = percent_decode_path(path);
+    let path = path.as_str();
     // `file:///C:/dir` strips to `/C:/dir`; drop the slash before a drive letter
     // so the result compares equal to the path Zed reports for the same file.
     let path = match path.strip_prefix('/') {
@@ -413,7 +473,10 @@ fn severity_to_number(severity: DiagnosticSeverity) -> u8 {
         DiagnosticSeverity::WARNING => 2,
         DiagnosticSeverity::INFORMATION => 3,
         DiagnosticSeverity::HINT => 4,
-        _ => 0,
+        // The scale has no zero. A language server reporting a severity outside
+        // 1-4 is out of spec, but answering with 0 puts *us* out of spec too and
+        // leaves the CLI to guess; 3 (information) is the neutral choice.
+        _ => 3,
     }
 }
 

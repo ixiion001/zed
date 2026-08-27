@@ -210,8 +210,13 @@ mkdir -p "$staging"
 case "$PLATFORM" in
     macos)
         mount=$(mktemp -d)
-        # -nobrowse keeps it out of Finder; -quiet suppresses the license echo.
-        hdiutil attach "$TMP/$ASSET" -mountpoint "$mount" -nobrowse -quiet
+        # bundle-mac attaches a licence agreement to the image (dmg-license, at
+        # bundle-mac:269), and hdiutil waits for that to be accepted before it
+        # will mount. The herestring answers it. Not `yes |`: `yes` takes SIGPIPE
+        # when hdiutil exits, and `set -o pipefail` would turn that into a
+        # failure. PAGER=cat stops hdiutil paging the licence text and blocking.
+        # -nobrowse keeps the volume out of Finder.
+        env PAGER=cat hdiutil attach "$TMP/$ASSET" -mountpoint "$mount" -nobrowse -quiet <<< "Y"
         # Copy out before detaching: the DMG is read-only and goes away below.
         cp -R "$mount"/*.app "$staging"/
         hdiutil detach "$mount" -quiet

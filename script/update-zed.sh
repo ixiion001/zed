@@ -174,7 +174,11 @@ fi
 
 release="$TMP/release.json"
 if [ "$PRE" -eq 1 ]; then
-    "${CURL[@]}" "$API/releases?per_page=10" -o "$TMP/list.json"
+    code=$("${CURL[@]}" --write-out '%{http_code}' -o "$TMP/list.json" "$API/releases?per_page=10")
+    if [ "$code" != 200 ]; then
+        echo "GitHub returned HTTP $code listing releases for $REPO" >&2
+        exit 1
+    fi
     python3 -c 'import json,sys
 data = json.load(open(sys.argv[1]))
 # An error response is a JSON object, not the expected array; iterating it would
@@ -186,6 +190,16 @@ else
     # promoted, so there is nothing to update to. Not an error.
     code=$("${CURL[@]}" --write-out '%{http_code}' -o "$release" "$API/releases/latest")
     if [ "$code" = 404 ]; then
+        # 404 is ambiguous: the repository exists with nothing promoted yet, or
+        # it does not exist at all -- a typo in --repo reads exactly the same.
+        # Only the first is normal, so spend one extra request to tell them
+        # apart. Reporting a misspelled repository as "up to date" is the same
+        # quiet no-op as the rate limit above, and just as misleading.
+        repo_code=$("${CURL[@]}" --write-out '%{http_code}' -o /dev/null "$API")
+        if [ "$repo_code" != 200 ]; then
+            echo "repository $REPO not found (HTTP $repo_code)" >&2
+            exit 1
+        fi
         echo '{}' > "$release"
     elif [ "$code" != 200 ]; then
         echo "GitHub returned HTTP $code for /releases/latest" >&2

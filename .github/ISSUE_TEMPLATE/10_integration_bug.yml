@@ -1,0 +1,36 @@
+name: Report a bug in the Claude Code integration
+description: Something wrong with this fork's editor integration or its builds.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For anything that also happens on an official Zed build, please report it
+        [upstream](https://github.com/zed-industries/zed/issues) instead — this
+        fork carries one extra crate and cannot fix the editor.
+
+        `script/claude-ide-probe.py` checks the integration end to end and prints
+        which step failed. Its output is the single most useful thing to attach.
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Release
+      description: The tag you installed, e.g. cc-v1.16.3-2. `Zed Dev > About` also names the build.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Platform
+      options: [Windows, macOS (Apple silicon), Linux (x86_64)]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Probe output
+      description: Output of `python3 script/claude-ide-probe.py`, if you can run it.
+      render: shell

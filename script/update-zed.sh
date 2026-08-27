@@ -106,15 +106,30 @@ print("" if v is None else v)' "$1" "$2"
 
 # --- what is installed -------------------------------------------------------
 #
-# The build stamps its commit into the version string, so asking the installed
-# CLI is stateless: it stays correct even for an install someone unpacked by
-# hand, and there is no state file to go stale. Anything unreadable is reported
-# as "nothing found", which makes this run install rather than skip -- the same
-# fallback update-zed.ps1 takes.
+# Preferred, and stateless: the build stamps its commit into the version string,
+# so asking the installed CLI stays correct even for a copy someone unpacked by
+# hand. That works on Linux.
+#
+# It cannot work on macOS. There the CLI takes a different path entirely --
+# `mac_os::Bundle::zed_version_string` in crates/cli/src/main.rs formats
+# `CFBundleShortVersionString` out of Info.plist, which carries neither the
+# channel nor the commit, so `--version` reports a bare `Zed 1.16.3`. Official
+# Zed prints the same shape, which makes it look like a stable build rather than
+# a missing field. Embedding the commit in the bundle instead would invalidate
+# its ad-hoc signature, so this records what it installed and reads that back.
+#
+# Anything unreadable reports "nothing found", which installs rather than skips
+# -- the same fallback update-zed.ps1 takes.
+
+STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/zed-claude-code
+STATE_FILE="$STATE_DIR/installed-commit"
 
 installed=
 if [ -x "$CLI" ]; then
     installed=$("$CLI" --version 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -1 || true)
+fi
+if [ -z "$installed" ] && [ -e "$APP" ] && [ -r "$STATE_FILE" ]; then
+    installed=$(grep -oE '^[0-9a-f]{40}$' "$STATE_FILE" 2>/dev/null | head -1 || true)
 fi
 
 short=${installed:0:10}
@@ -250,6 +265,10 @@ else
     mkdir -p "$INSTALL_DIR/bin"
     ln -sfn "$APP/bin/zed" "$INSTALL_DIR/bin/zed"
 fi
+
+# Record what was installed, for the platforms whose artifact cannot say.
+mkdir -p "$STATE_DIR"
+printf '%s\n' "$commit" > "$STATE_FILE"
 
 now=
 [ -x "$CLI" ] && now=$("$CLI" --version 2>/dev/null | head -1 || true)

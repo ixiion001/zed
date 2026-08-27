@@ -98,15 +98,6 @@ jobs:
       # ~11 GB before remote_server. The simulator runtimes are the biggest
       # thing here that building Zed cannot need. Never touch Xcode itself:
       # `xcrun metal` lives in it.
-      - name: Reclaim runner disk (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
-          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches || true
-          sudo rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport || true
-          df -h / | tail -1
-
       # Everything script/bundle-mac needs that the image might not have.
       # Failing here costs five minutes; failing inside the bundle step costs
       # twenty minutes of a two-hour build.
@@ -114,6 +105,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           sw_vers && uname -m
+          # A Zed tree is ~11 GB; this image reported 96 GB free, so no reclaim
+          # step is warranted. Printed so a later ENOSPC has a number to compare
+          # against rather than a guess.
+          df -h / | tail -1
           # gpui compiles the Metal shaders at build time (gpui_macos/build.rs).
           # `metal` ships with Xcode, not the Command Line Tools, and recent
           # Xcode makes it a separately downloadable component:
@@ -289,8 +284,10 @@ jobs:
           xattr -dr com.apple.quarantine "/Applications/Zed Dev.app"
           ```
 
-          It installs alongside official Zed rather than replacing it, and keeps its
-          own settings directory.
+          It installs alongside official Zed rather than replacing it. Both read the
+          same settings, in `~/Library/Application Support/Zed`; only the workspace
+          database is kept apart (`db/0-dev` against `db/0-stable`), so open tabs and
+          window layout do not bleed between the two.
 
           ### Install — Linux
 

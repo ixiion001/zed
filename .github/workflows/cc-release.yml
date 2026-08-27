@@ -84,7 +84,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force -Path staging | Out-Null
           Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/
-          $name = "zed-claude-code-windows-x64"
+          $name = "zed-claude-code-windows-x86_64"
           Compress-Archive -Path staging/* -DestinationPath "$name.zip" -Force
           # Written through .NET rather than Out-File so the line ending is LF:
           # PowerShell would emit CRLF, which makes `sha256sum -c` on Linux and
@@ -143,6 +143,20 @@ jobs:
           # bundle name from it — left at "stable" this ships an auto-updating
           # binary that would replace itself with official Zed.
           echo dev > crates/zed/RELEASE_CHANNEL
+
+          # Stamp the commit into the bundle so the updater can tell which build
+          # is installed. macOS is the one platform whose artifact cannot say by
+          # itself: `cli --version` there reports CFBundleShortVersionString,
+          # which carries neither channel nor commit.
+          #
+          # Editing the finished Info.plist would break the ad-hoc signature, so
+          # this goes in before anything is built: `[package.metadata.bundle-dev]`
+          # sets `osx_info_plist_exts = ["resources/info/*"]`, cargo-bundle merges
+          # every fragment there into Info.plist, and bundle-mac signs afterwards.
+          # Written per build and never committed.
+          printf '<key>ZedCommitSha</key>\n<string>%s</string>\n' "$GITHUB_SHA" \
+            > crates/zed/resources/info/CommitSha.plist
+
           ./script/bundle-mac aarch64-apple-darwin
 
           rel="target/aarch64-apple-darwin/release"
@@ -157,6 +171,15 @@ jobs:
           if [ "$id" != "dev.zed.Zed-Dev" ]; then
             echo "refusing to publish: expected a dev-channel bundle, got '$id'" >&2
             exit 1
+          fi
+
+          # Whether cargo-bundle picked the fragment up decides only how well the
+          # updater behaves on a hand-installed copy — it falls back to the state
+          # file it writes itself — so this reports rather than fails. Failing a
+          # two-hour build over it would cost far more than it saves.
+          stamped=$(/usr/libexec/PlistBuddy -c 'Print :ZedCommitSha' "$plist" 2>/dev/null || true)
+          if [ "$stamped" != "$GITHUB_SHA" ]; then
+            echo "::warning::Info.plist carries no ZedCommitSha (got '$stamped'); the macOS updater will fall back to its state file"
           fi
 
           name="zed-claude-code-macos-aarch64.dmg"
@@ -185,8 +208,13 @@ jobs:
           script/bundle-linux
 
           archive=$(ls target/release/zed-linux-*.tar.gz)
-          mv "$archive" .
-          name=$(basename "$archive")
+          # bundle-linux names the tarball zed-linux-<arch>.tar.gz, which is
+          # byte-for-byte the filename upstream's own Linux build produces — so
+          # in a Downloads folder ours would be indistinguishable from official
+          # Zed, the confusion this fork has to avoid rather than create. Rename
+          # it into the zed-claude-code-<os>-<arch> form the other two legs use.
+          name="zed-claude-code-linux-$(uname -m).tar.gz"
+          mv "$archive" "$name"
 
           # The bundle directory is named from the same channel the build used,
           # so finding zed-dev.app is what proves this is not a stable build —
@@ -293,7 +321,7 @@ jobs:
 
           ```
           sudo apt install libasound2t64      # libasound2 on releases before 24.04
-          tar -xzf zed-linux-x86_64.tar.gz -C ~/.local
+          tar -xzf zed-claude-code-linux-x86_64.tar.gz -C ~/.local
           ln -sf ~/.local/zed-dev.app/bin/zed ~/.local/bin/zed
           ```
 

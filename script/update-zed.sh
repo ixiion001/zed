@@ -46,10 +46,9 @@ done
 
 # --- platform ----------------------------------------------------------------
 #
-# The three legs of cc-release.yml do not agree on asset naming: Windows and
-# macOS are packaged by us as zed-claude-code-*, while the Linux tarball keeps
-# whatever script/bundle-linux called it. Match the real names rather than a
-# pattern, so a rename is a loud failure here instead of a silent no-op.
+# Every leg of cc-release.yml publishes as zed-claude-code-<os>-<arch>, so the
+# names below are spelled out in full rather than matched by pattern: a rename
+# upstream then fails loudly here instead of silently finding nothing to do.
 
 case "$(uname -s)" in
     Darwin)
@@ -61,7 +60,7 @@ case "$(uname -s)" in
         ;;
     Linux)
         PLATFORM=linux
-        ASSET=zed-linux-x86_64.tar.gz
+        ASSET=zed-claude-code-linux-x86_64.tar.gz
         INSTALL_DIR=${INSTALL_DIR:-$HOME/.local}
         APP="$INSTALL_DIR/zed-dev.app"
         CLI="$APP/bin/zed"
@@ -128,6 +127,18 @@ installed=
 if [ -x "$CLI" ]; then
     installed=$("$CLI" --version 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -1 || true)
 fi
+# cc-release.yml stamps the commit into the macOS bundle's Info.plist, before
+# cargo-bundle builds it and therefore inside the signature. That is stateless
+# again, so it also covers a bundle someone dragged out of the DMG by hand --
+# which is what the release notes tell people to do. Filtered through grep
+# because PlistBuddy reports a missing key on stdout, not stderr, and the error
+# text would otherwise be taken for a commit.
+if [ -z "$installed" ] && [ -f "$APP/Contents/Info.plist" ]; then
+    installed=$(/usr/libexec/PlistBuddy -c 'Print :ZedCommitSha' "$APP/Contents/Info.plist" \
+        2>/dev/null | grep -oE '^[0-9a-f]{40}$' | head -1 || true)
+fi
+# Releases predating that stamp have no such key, so keep reading back what this
+# script recorded when it installed.
 if [ -z "$installed" ] && [ -e "$APP" ] && [ -r "$STATE_FILE" ]; then
     installed=$(grep -oE '^[0-9a-f]{40}$' "$STATE_FILE" 2>/dev/null | head -1 || true)
 fi

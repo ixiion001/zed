@@ -462,7 +462,7 @@ def check_open_editors(rpc: Rpc) -> None:
         uri = editor.get("uri", "")
         if uri:
             check(uri.startswith("file:///") and "\\" not in uri,
-                  f"editor uri is well formed (fix 3)", repr(uri))
+                  "editor uri is well formed (fix 3)", repr(uri))
         label = editor.get("label") or editor.get("name") or ""
         if label:
             check(os.sep not in label and "/" not in label,

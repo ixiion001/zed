@@ -1,9 +1,15 @@
 # yaml-language-server: $schema=https://www.schemastore.org/github-issue-config.json
-blank_issues_enabled: false
+#
+# Upstream's version of this file sent people to Zed Industries' Discord and
+# discussions. On a fork they do not maintain that is the wrong address for a
+# bug in this build, so the links below separate the two cases instead.
+blank_issues_enabled: true
 contact_links:
-  - name: Feature request
-    url: https://github.com/zed-industries/zed/discussions/new?category=feature-requests
-    about: To request a feature, open a new discussion under one of the appropriate categories.
-  - name: Our Discord community
-    url: https://discord.com/invite/zedindustries
-    about: Join our Discord server for real-time discussion and user support.
+  - name: A problem with Zed itself, not this fork
+    url: https://github.com/zed-industries/zed/issues
+    about: >-
+      If it reproduces on an official Zed build, report it upstream. They cannot
+      help with this fork, and this fork cannot fix the editor.
+  - name: A question about Claude Code, not the integration
+    url: https://github.com/anthropics/claude-code/issues
+    about: For the CLI itself, rather than how it talks to this editor.

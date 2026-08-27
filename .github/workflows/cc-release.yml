@@ -23,7 +23,7 @@ on:
         description: JSON array of runners to build
         # Must match the matrix fallback below, or a manual dispatch quietly
         # builds a subset of what a tag would.
-        default: '["windows-latest","ubuntu-24.04"]'
+        default: '["windows-latest","ubuntu-24.04","macos-latest"]'
         required: false
 
 env:
@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest","ubuntu-24.04"]') }}
+        os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest","ubuntu-24.04","macos-latest"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +93,82 @@ jobs:
           [System.IO.File]::WriteAllText("$PWD/$name.zip.sha256", "$hash  $name.zip`n")
           "built $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
+      # GitHub's macOS runners are far smaller than the persistent ones upstream
+      # builds on — they only clear `target` past 350 GB — and a Zed tree is
+      # ~11 GB before remote_server. The simulator runtimes are the biggest
+      # thing here that building Zed cannot need. Never touch Xcode itself:
+      # `xcrun metal` lives in it.
+      - name: Reclaim runner disk (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport || true
+          df -h / | tail -1
+
+      # Everything script/bundle-mac needs that the image might not have.
+      # Failing here costs five minutes; failing inside the bundle step costs
+      # twenty minutes of a two-hour build.
+      - name: Check the macOS toolchain
+        if: runner.os == 'macOS'
+        run: |
+          sw_vers && uname -m
+          # gpui compiles the Metal shaders at build time (gpui_macos/build.rs).
+          # `metal` ships with Xcode, not the Command Line Tools, and recent
+          # Xcode makes it a separately downloadable component:
+          # `xcodebuild -downloadComponent MetalToolchain` if this fails.
+          xcrun -sdk macosx metal --version
+          cmake --version | head -1
+          # bundle-mac installs this itself; doing it here catches a fork that
+          # no longer builds before the long step rather than during it.
+          cargo install cargo-bundle \
+            --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
+          found=$(cargo -q bundle --help 2>&1 | head -n 1)
+          test "$found" = "cargo-bundle v0.6.1-zed" || { echo "got: $found"; exit 1; }
+          # bundle-mac reads both of these through the `dev` channel name.
+          test -f crates/zed/contents/dev/embedded.provisionprofile
+          grep -q '^\[package.metadata.bundle-dev\]' crates/zed/Cargo.toml
+
+      # bundle-mac shells out to `npm install --global dmg-license` for the
+      # DMG's license agreement.
+      - uses: actions/setup-node@v4
+        if: runner.os == 'macOS'
+        with:
+          node-version: '24'
+
+      # Upstream's own release workflow runs exactly this line, so it stays
+      # unmodified here: no second recipe to keep working across rebases.
+      - name: Build and bundle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Same reason as the Linux leg: bundle-mac reads the channel from this
+          # file and re-exports it *over* the environment, so the env var above
+          # governs nothing here. It also picks the provisioning profile and the
+          # bundle name from it — left at "stable" this ships an auto-updating
+          # binary that would replace itself with official Zed.
+          echo dev > crates/zed/RELEASE_CHANNEL
+          ./script/bundle-mac aarch64-apple-darwin
+
+          rel="target/aarch64-apple-darwin/release"
+          # bundle-mac moves the bundle into the DMG staging directory before
+          # creating the image, so that is where it is left.
+          app=$(ls -d "$rel"/dmg/*.app)
+          plist="$app/Contents/Info.plist"
+          id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$plist")
+          # The macOS counterpart of the Windows `+dev.` check and the Linux
+          # zed-dev.app check. Only a dev-channel build carries this identifier,
+          # and reading it needs no binary execution.
+          if [ "$id" != "dev.zed.Zed-Dev" ]; then
+            echo "refusing to publish: expected a dev-channel bundle, got '$id'" >&2
+            exit 1
+          fi
+
+          name="zed-claude-code-macos-aarch64.dmg"
+          mv "$rel/Zed-aarch64.dmg" "$name"
+          shasum -a 256 "$name" > "$name.sha256"
+          echo "built $name ($(du -h "$name" | cut -f1), $id)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: ./script/linux
@@ -139,6 +215,8 @@ jobs:
             *.zip.sha256
             *.tar.gz
             *.tar.gz.sha256
+            *.dmg
+            *.dmg.sha256
           if-no-files-found: error
 
   # One job for every platform, so a multi-platform release stays a single entry
@@ -200,6 +278,19 @@ jobs:
           `script/update-zed.ps1` handles later updates and adds a "Zed (Claude Code)"
           Start Menu entry, which matters if you also have a local build — both are
           otherwise just called "Zed".
+
+          ### Install — macOS (Apple silicon)
+
+          Open the `.dmg` and drag **Zed Dev.app** to `/Applications`. The build is
+          unsigned, so Gatekeeper quarantines it — clear that once, or macOS reports
+          the app as damaged:
+
+          ```
+          xattr -dr com.apple.quarantine "/Applications/Zed Dev.app"
+          ```
+
+          It installs alongside official Zed rather than replacing it, and keeps its
+          own settings directory.
 
           ### Install — Linux
 

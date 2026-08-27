@@ -9,7 +9,7 @@
 //! own save.
 
 use crate::server::{ProtocolError, error_codes};
-use buffer_diff::BufferDiff;
+use buffer_diff::{BufferDiff, DiffBaseKind};
 use editor::{DiffViewStyle, MultiBuffer, SelectionEffects, SplittableEditor, scroll::Autoscroll};
 use futures::channel::oneshot;
 use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, DismissEvent, WeakEntity};
@@ -60,16 +60,28 @@ pub async fn open_diff(
     let (buffer, diff, base_ready) = window
         .update(cx, |_root, _window, cx| {
             let buffer = cx.new(|cx| Buffer::local(new_file_contents.clone(), cx));
+            let language = buffer.read(cx).language().cloned();
+            let language_registry = buffer.read(cx).language_registry();
             let snapshot = buffer.read(cx).text_snapshot();
-            let diff = cx.new(|cx| BufferDiff::new(&snapshot, cx));
+            // `Custom` because the base is caller-provided text (the file as it
+            // is on disk) rather than anything from git.
+            let diff = cx.new(|cx| {
+                BufferDiff::new(
+                    &snapshot,
+                    language,
+                    language_registry,
+                    DiffBaseKind::Custom,
+                    cx,
+                )
+            });
             let base_ready = diff.update(cx, |diff, cx| {
-                diff.set_base_text(Some(old_contents.into()), None, snapshot, cx)
+                diff.set_base_text(Some(old_contents.into()), snapshot, cx)
             });
             (buffer, diff, base_ready)
         })
         .map_err(|error| ProtocolError::internal(error.to_string()))?;
 
-    base_ready.await.ok();
+    base_ready.await;
 
     let editor_id = window
         .update(cx, |_root, window, cx| {

@@ -2,11 +2,17 @@
 # archives, so the Windows, macOS and Linux machines can run the patched editor
 # without each building it locally.
 #
+# Named `cc-release` rather than `release` so it sits *beside* Zed's own
+# .github/workflows/release.yml instead of replacing it. Upstream regenerates
+# that file from `xtask::workflows::release`, so overwriting it made every rebase
+# conflict; upstream's copy is inert here anyway, its jobs being guarded by
+# `repository_owner == 'zed-industries'`.
+#
 # Zed's own auto-updater cannot be used here: a `stable`-channel build downloads
 # the official binary and overwrites this one, silently dropping the patch. Every
 # build therefore forces the `dev` channel, which disables that updater, and a
-# separate script/update-zed.* handles updates instead.
-name: release
+# separate updater script handles updates instead.
+name: cc-release
 
 on:
   push:
@@ -74,8 +80,11 @@ jobs:
           Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/
           $name = "zed-claude-code-windows-x64"
           Compress-Archive -Path staging/* -DestinationPath "$name.zip" -Force
-          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
-            Out-File "$name.zip.sha256" -Encoding ascii
+          # Written through .NET rather than Out-File so the line ending is LF:
+          # PowerShell would emit CRLF, which makes `sha256sum -c` on Linux and
+          # macOS look for a filename with a trailing carriage return and fail.
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$PWD/$name.zip.sha256", "$hash  $name.zip`n")
           "built $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
@@ -85,3 +94,90 @@ jobs:
             *.zip
             *.zip.sha256
           if-no-files-found: error
+
+  # One job for every platform, so a multi-platform release stays a single entry
+  # rather than one per operating system.
+  publish:
+    name: publish prerelease
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/cc-v')
+    runs-on: ubuntu-latest
+    # The repository default for GITHUB_TOKEN is read-only; creating a release
+    # needs write.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The archives round-trip through artifact storage, so check the hash we
+      # are about to publish against the bytes we are about to publish.
+      - name: Verify checksums
+        run: cd dist && sha256sum -c *.sha256
+
+      # Always a prerelease, never conditionally. `/releases/latest` excludes
+      # prereleases, so this one flag is what stops a machine updating itself to
+      # a build nobody has looked at; promoting is a deliberate
+      # `gh release edit <tag> --prerelease=false`.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          upstream="${TAG#cc-v}"
+          upstream="${upstream%-*}"
+
+          # Quoted heredoc: the body is full of backticks, which an unquoted one
+          # would try to execute. Placeholders are filled in afterwards.
+          cat > notes.md <<'NOTES'
+          **Unofficial build of [Zed](https://zed.dev) with native Claude Code IDE integration.**
+          Not affiliated with or endorsed by Zed Industries.
+
+          Zed **@UPSTREAM@** plus `crates/claude_code_ide`, built from `@COMMIT@`.
+          Run the unmodified `claude` CLI in Zed's integrated terminal and it connects
+          on its own — diagnostics, open-file and Keep/Reject diffs appear in the editor.
+
+          ### Install (Windows)
+
+          Unzip into `%LOCALAPPDATA%\Programs\ZedDev` and run `zed.exe` from there.
+          `conpty.dll` and `OpenConsole.exe` have to sit beside it or the integrated
+          terminal will not open. No installer, no admin rights, nothing added to `PATH`.
+
+          ### Verify the download
+
+          ```
+          sha256sum -c zed-claude-code-windows-x64.zip.sha256
+          ```
+
+          These binaries are **unsigned**. The source is this repository at the commit
+          above, and can be rebuilt from it.
+
+          ### Updates
+
+          A **dev-channel** build, so Zed's own auto-updater is off deliberately: a
+          stable-channel build would download official Zed over this one and silently
+          discard the patch. To update, close Zed and unzip a newer release over the
+          top.
+
+          ### Why prerelease
+
+          Marked prerelease on purpose. `/releases/latest` skips prereleases, so nothing
+          updates itself to this build until it is promoted by hand.
+
+          ### Credits
+
+          [Zed Industries](https://github.com/zed-industries/zed) for the editor, and
+          [vitaly-andr](https://github.com/vitaly-andr/zed) for `crates/claude_code_ide`.
+          GPL-3; corresponding source is this repository.
+          NOTES
+
+          sed -i "s|@UPSTREAM@|$upstream|g; s|@COMMIT@|$GITHUB_SHA|g" notes.md
+
+          # `create` fails if the release already exists, e.g. on a re-run; fall
+          # back to replacing its assets rather than failing the job.
+          gh release create "$TAG" --prerelease \
+            --title "Zed $upstream + Claude Code IDE (unofficial)" \
+            --notes-file notes.md dist/* \
+            || gh release upload "$TAG" dist/* --clobber

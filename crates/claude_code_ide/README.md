@@ -18,7 +18,9 @@ as an ACP agent in the agent panel; this is the complementary direction, where
   (`getOpenEditors`, `openFile`, `saveDocument`, `checkDocumentDirty`).
 - **Blocking accept/reject diffs** (`openDiff`): Claude's proposed change opens
   as a side-by-side diff tab, the view centers on the first change, and the CLI
-  blocks until you click **Keep** (green) or **Reject** (red).
+  blocks until you click **Keep** (green) or **Reject** (red). Dismissing the
+  notification without choosing counts as Reject, and other tool calls keep
+  being served while the diff is open.
 
 ## How it works
 
@@ -33,8 +35,10 @@ as an ACP agent in the agent panel; this is the complementary direction, where
    protocol version `2024-11-05`.
 3. Auto-connect: the workspace publishes the server port onto `Project`, and
    `crates/project/src/terminals.rs` injects `CLAUDE_CODE_SSE_PORT` and
-   `ENABLE_IDE_INTEGRATION=true` into the integrated terminal, so `claude`
-   connects automatically. An external terminal can still attach via `/ide`,
+   `ENABLE_IDE_INTEGRATION=true` into *local* integrated terminals, so `claude`
+   connects automatically. Terminals running over SSH are left alone: the port
+   is on this machine's loopback, so advertising it there would name the remote
+   host. Either way an external terminal can still attach via `/ide`,
    discovering Zed from the lockfile.
 
 Entry point: `claude_code_ide::init(cx)`, called from `crates/zed/src/main.rs`.

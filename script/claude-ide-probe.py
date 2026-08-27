@@ -482,6 +482,12 @@ def main() -> int:
     print(f"claude_code_ide probe — platform={sys.platform} windows={IS_WINDOWS}\n", flush=True)
 
     websocket = None
+    # An abort has to fail the run even though it records no failed check. The
+    # exception fires outside check(), so the checks that never ran are simply
+    # absent from _checks and the summary below sees nothing but passes --
+    # reporting a server that died mid-probe as healthy, which is precisely the
+    # regression this script exists to catch.
+    aborted = False
     try:
         port, lock = find_lockfile(arguments.port)
         check_lockfile(lock)
@@ -497,8 +503,10 @@ def main() -> int:
         check_workspace_folders(rpc, lock.get("workspaceFolders", []))
         check_open_editors(rpc)
     except ProbeFailure as error:
+        aborted = True
         print(f"\nprobe aborted: {error}", file=sys.stderr, flush=True)
     except OSError as error:
+        aborted = True
         print(f"\nprobe aborted: {error}", file=sys.stderr, flush=True)
     finally:
         if websocket is not None:
@@ -507,11 +515,13 @@ def main() -> int:
     failed = [label for ok, label, _ in _checks if not ok]
     total = len(_checks)
     print(f"\n{total - len(failed)}/{total} checks passed", flush=True)
-    if failed:
-        for label in failed:
-            print(f"  FAILED: {label}", flush=True)
-        return 1
-    if total == 0:
+    for label in failed:
+        print(f"  FAILED: {label}", flush=True)
+    if aborted:
+        # Said explicitly, because "20/20 checks passed" followed by a non-zero
+        # exit reads like a bug in the probe rather than a truncated run.
+        print("  ABORTED: the run ended early, so later checks never ran", flush=True)
+    if failed or aborted or total == 0:
         return 1
     return 0
 

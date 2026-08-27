@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 # RFC 6455 section 1.3.
-WS_GUID = "258EAFA5-E914-47DA-95CA-5AB0DC85B11C"
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 AUTH_HEADER = "x-claude-code-ide-authorization"
 SUBPROTOCOL = "mcp"

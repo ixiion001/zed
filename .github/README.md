@@ -59,12 +59,14 @@ stable-channel build would download official Zed over the top and silently disca
 the updater scripts instead.
 
 ```sh
-script/update-zed.sh            # macOS and Linux
-script/update-zed.ps1           # Windows
+script/update-zed.sh  [--pre] [--dry-run]     # macOS and Linux
+script/update-zed.ps1 [-Pre]  [-DryRun]       # Windows
 ```
 
 Both read `/releases/latest`, which excludes prereleases — so nothing updates itself to a build
-nobody has looked at. Pass `--pre` to try one anyway, `--dry-run` to preview.
+nobody has looked at. `--pre` / `-Pre` tries one anyway; `--dry-run` / `-DryRun` previews. Mind the
+spelling: PowerShell takes a single dash, and `--pre` there binds to the first positional parameter
+instead of failing.
 
 ## Known limitations
 

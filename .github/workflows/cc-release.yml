@@ -21,7 +21,9 @@ on:
     inputs:
       platforms:
         description: JSON array of runners to build
-        default: '["windows-latest"]'
+        # Must match the matrix fallback below, or a manual dispatch quietly
+        # builds a subset of what a tag would.
+        default: '["windows-latest","ubuntu-24.04"]'
         required: false
 
 env:

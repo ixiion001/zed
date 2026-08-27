@@ -137,7 +137,35 @@ impl ClaudeCodeIdeServer {
         // Each accepted connection is served on the foreground executor so its
         // tool handlers can touch workspace entities; the async I/O still yields,
         // so it never blocks the UI.
-        while let Ok((stream, _addr)) = listener.accept().await {
+        // A failed accept used to end the loop and return Ok(()), which left the
+        // lock file advertising a port nothing was listening on and logged
+        // nothing at all -- the CLI would connect, fail, and give no clue why.
+        // Most accept errors are transient (a peer that went away between the
+        // SYN and our accept, a momentary descriptor shortage), so carry on;
+        // give up only if they stop being occasional, which means the listener
+        // itself is gone.
+        let mut consecutive_failures = 0u32;
+        loop {
+            let (stream, _addr) = match listener.accept().await {
+                Ok(accepted) => {
+                    consecutive_failures = 0;
+                    accepted
+                }
+                Err(error) => {
+                    consecutive_failures += 1;
+                    log::warn!(
+                        "Claude Code IDE: accept failed ({consecutive_failures}): {error}"
+                    );
+                    if consecutive_failures >= 16 {
+                        log::error!(
+                            "Claude Code IDE: giving up on the listener after \
+                             {consecutive_failures} consecutive accept failures"
+                        );
+                        break;
+                    }
+                    continue;
+                }
+            };
             let dispatcher = WorkspaceDispatcher::new(workspace.clone(), window, cx.clone());
             let auth_token = auth_token.clone();
             cx.spawn(async move |_cx| {

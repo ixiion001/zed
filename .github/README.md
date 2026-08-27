@@ -45,7 +45,7 @@ xattr -dr com.apple.quarantine "/Applications/Zed Dev.app"
 
 ```sh
 sudo apt install libasound2t64          # libasound2 before Ubuntu 24.04
-tar -xzf zed-linux-x86_64.tar.gz -C ~/.local
+tar -xzf zed-claude-code-linux-x86_64.tar.gz -C ~/.local
 ln -sf ~/.local/zed-dev.app/bin/zed ~/.local/bin/zed
 ```
 

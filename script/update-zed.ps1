@@ -38,7 +38,7 @@ $ProgressPreference = 'SilentlyContinue'
 $api = "https://api.github.com/repos/$Repo"
 $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'update-zed' }
 $exe = Join-Path $InstallDir 'zed.exe'
-$assetName = 'zed-claude-code-windows-x64.zip'
+$assetName = 'zed-claude-code-windows-x86_64.zip'
 
 # Get-FileHash is absent from some locked-down Windows PowerShell installs, so
 # hash through .NET rather than depend on it.

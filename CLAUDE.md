@@ -34,7 +34,18 @@ rebasing onto a new Zed release costs ~10 lines rather than a day.
 | `windows-ide-fixes` | tagged `fallback-1.6.0`, the known-good Zed 1.6.0 lineage. Left alone |
 | `auto/v<tag>` | created by the weekly auto-rebase job for inspection |
 
-## Five traps that cost real time
+## CI layout
+
+| File | Whose |
+|---|---|
+| `.github/workflows/cc-release.yml` | **ours.** Builds on `cc-v*` tags, publishes a prerelease |
+| `.github/workflows/claude-code-ide.yml` | **ours.** Tests the crate on three platforms |
+| `.github/workflows/release.yml` and every other file there | **upstream's — leave alone** |
+
+Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.16.3-1`. Push tags to **`fork`**; `origin` is
+`vitaly-andr/zed` and `git push --tags` would put them on someone else's repository.
+
+## Traps that cost real time
 
 1. **Release channel.** `crates/zed/RELEASE_CHANNEL` says `stable`, and `script/bundle-mac:54` /
    `bundle-windows.ps1:61` export it as `ZED_RELEASE_CHANNEL`. A release build uses that compile-time
@@ -51,6 +62,29 @@ rebasing onto a new Zed release costs ~10 lines rather than a day.
    `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
 5. **You cannot overwrite a running `.exe`.** Rename `zed.exe` aside before rebuilding while Zed is
    open — renaming a running binary is permitted on Windows, overwriting is not.
+6. **Never put fork CI at a path upstream owns.** Our release workflow originally *replaced* Zed's
+   1029-line `.github/workflows/release.yml`. Upstream regenerates that file from
+   `xtask::workflows::release`, so every rebase over it conflicted — which would have stopped the
+   weekly auto-rebase dead, every week, for nothing. Ours is `cc-release.yml` now. Upstream's copy is
+   inert in a fork anyway: its jobs are guarded by `repository_owner == 'zed-industries'`.
+7. **Two ways a publish job dies *after* a two-hour build.** Both were caught before that happened,
+   both cost nothing to prevent:
+   - a job that skips `actions/checkout` has no git remote, so `gh` aborts with
+     `fatal: not a git repository`. Set `GH_REPO: ${{ github.repository }}`.
+   - naming *any* scope in a `permissions:` block sets every unnamed scope to `none`. Spelling out
+     `contents: write` alone left the job unable to read its own run's artifacts; `actions: read` was
+     needed too.
+
+   (The repository's Actions default is read-only, but a job requesting `contents: write` is still
+   granted it — verified, no settings change required.)
+8. **PowerShell writes CRLF, which breaks checksums on Unix.** `Out-File` gave the `.sha256` file
+   CRLF endings, so `sha256sum -c` on Linux and macOS looked for a filename with a trailing carriage
+   return: `'…zip'$'\r': No such file or directory`. That breaks the verification step *and* the
+   instruction given to users. Write such files through .NET with an explicit newline instead:
+
+   ```powershell
+   [System.IO.File]::WriteAllText("$PWD/$name.zip.sha256", "$hash  $name.zip`n")
+   ```
 
 ## Where the plan lives
 
@@ -62,8 +96,15 @@ fixed here. Read them before proposing work — most obvious questions are answe
 
 | Session | Machine | Owns |
 |---|---|---|
-| Windows | `<windows-workspace>` | `main-patched`, CI, Gate 1, the release workflow |
+| Windows | `<windows-workspace>` | `main-patched`, CI, `cc-release.yml`, the updater scripts |
 | macOS (`macos-host`) | Apple silicon | the macOS leg: toolchain, `script/bundle-mac`, producing a known-good recipe |
+
+**Where things stand (2026-08-27).** Gate 1 is closed and **`cc-v1.16.3-1` is published as a
+prerelease** — Windows only, verified end to end from the published assets. `/releases/latest` returns
+404 while only prereleases exist, which is the promotion gate working as designed. So the Windows leg
+is done and the macOS leg is the critical path; a `.app` that launches and auto-connects is all that
+Gate 2 needs. Adding macOS to the release is then a matter of extending the `build` matrix in
+`cc-release.yml` — the `publish` job already collects every platform's artifacts into one release.
 
 Neither session creates branches, commits, pushes or dispatches workflows without the maintainer coordinating
 it — two agents force-pushing one branch is an expensive way to lose an afternoon. Propose diffs and

@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest"]') }}
+        os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest","ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +61,11 @@ jobs:
           key: release-${{ matrix.os }}
           cache-on-failure: true
 
-      - name: Build
+      # Linux does not use this step: script/bundle-linux runs its own cargo
+      # build against an explicit target triple, and building twice would just
+      # cost an hour.
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
         run: cargo build --release --package zed --package cli
 
       # zed's build script downloads conpty and drops it beside the binary; the
@@ -87,12 +91,52 @@ jobs:
           [System.IO.File]::WriteAllText("$PWD/$name.zip.sha256", "$hash  $name.zip`n")
           "built $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: ./script/linux
+
+      # script/bundle-linux is worth using rather than tarring the bare binary:
+      # it copies the libstdc++ and other ldd dependencies in beside it, so the
+      # result still starts on distros whose system libstdc++ lacks the GLIBCXX
+      # symbols this toolchain needs, and it adds the icons, .desktop entry and
+      # licenses.
+      - name: Build and bundle (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # bundle-linux reads the channel from this file, not from the
+          # environment, and derives the bundle and desktop-entry names from it.
+          # Left at "stable" it would package a dev binary under stable names.
+          # The env var above already governs what gets compiled in; this keeps
+          # the packaging agreeing with it.
+          echo dev > crates/zed/RELEASE_CHANNEL
+          script/bundle-linux
+
+          archive=$(ls target/release/zed-linux-*.tar.gz)
+          mv "$archive" .
+          name=$(basename "$archive")
+
+          # The bundle directory is named from the same channel the build used,
+          # so finding zed-dev.app is what proves this is not a stable build —
+          # and a stable build is the one thing that must never ship, its
+          # auto-updater being able to replace the patched editor with official
+          # Zed. Checked without executing the binary, which needs a display.
+          if ! tar -tzf "$name" | grep -q '^zed-dev\.app/'; then
+            echo "refusing to publish: bundle is not a dev-channel build" >&2
+            tar -tzf "$name" | head -3 >&2
+            exit 1
+          fi
+
+          sha256sum "$name" > "$name.sha256"
+          echo "built $name ($(du -h "$name" | cut -f1))" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: zed-claude-code-${{ matrix.os }}
           path: |
             *.zip
             *.zip.sha256
+            *.tar.gz
+            *.tar.gz.sha256
           if-no-files-found: error
 
   # One job for every platform, so a multi-platform release stays a single entry
@@ -145,16 +189,33 @@ jobs:
           Run the unmodified `claude` CLI in Zed's integrated terminal and it connects
           on its own — diagnostics, open-file and Keep/Reject diffs appear in the editor.
 
-          ### Install (Windows)
+          ### Install — Windows
 
           Unzip into `%LOCALAPPDATA%\Programs\ZedDev` and run `zed.exe` from there.
           `conpty.dll` and `OpenConsole.exe` have to sit beside it or the integrated
           terminal will not open. No installer, no admin rights, nothing added to `PATH`.
 
-          ### Verify the download
+          `script/update-zed.ps1` handles later updates and adds a "Zed (Claude Code)"
+          Start Menu entry, which matters if you also have a local build — both are
+          otherwise just called "Zed".
+
+          ### Install — Linux
 
           ```
-          sha256sum -c zed-claude-code-windows-x64.zip.sha256
+          tar -xzf zed-linux-x86_64.tar.gz -C ~/.local
+          ln -sf ~/.local/zed-dev.app/bin/zed ~/.local/bin/zed
+          ```
+
+          Built on Ubuntu 24.04, so **glibc 2.39 is the floor** — it will not start on
+          Ubuntu 22.04 or Debian 12. `libstdc++` and the other shared libraries it needs
+          are bundled alongside the binary.
+
+          ### Verify the download
+
+          Every asset ships a `.sha256` beside it:
+
+          ```
+          sha256sum -c <asset>.sha256
           ```
 
           These binaries are **unsigned**. The source is this repository at the commit

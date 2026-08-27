@@ -46,7 +46,22 @@ pub async fn open_diff(
     // The current on-disk contents are the diff base (the "old" side).
     let old_contents = {
         let path = old_file_path.clone();
-        smol::unblock(move || std::fs::read_to_string(&path).unwrap_or_default()).await
+        smol::unblock(move || match std::fs::read_to_string(&path) {
+            Ok(contents) => Ok(contents),
+            // A file that does not exist yet is the create case: an empty base
+            // is right, and the whole proposal shows as added.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(error) => Err(error),
+        })
+        .await
+        // Anything else -- a permission error, or contents that are not UTF-8 --
+        // used to fall back to an empty base, which renders as "the file is
+        // empty and all of this is new". Keep would then return the proposal as
+        // the whole file and the CLI would write it, silently discarding
+        // contents the user was never shown. Refusing is the only safe answer.
+        .map_err(|error| {
+            ProtocolError::internal(format!("cannot read {old_file_path} to diff against: {error}"))
+        })?
     };
 
     let (decision_tx, decision_rx) = oneshot::channel::<bool>();

@@ -1,0 +1,87 @@
+# Builds this fork (Zed + the claude_code_ide patch) and publishes installable
+# archives, so the Windows, macOS and Linux machines can run the patched editor
+# without each building it locally.
+#
+# Zed's own auto-updater cannot be used here: a `stable`-channel build downloads
+# the official binary and overwrites this one, silently dropping the patch. Every
+# build therefore forces the `dev` channel, which disables that updater, and a
+# separate script/update-zed.* handles updates instead.
+name: release
+
+on:
+  push:
+    tags: ["cc-v*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: JSON array of runners to build
+        default: '["windows-latest"]'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+  # `crates/zed/RELEASE_CHANNEL` says "stable" and the bundle scripts export it.
+  # Setting it here keeps auto-update off; see the header.
+  ZED_RELEASE_CHANNEL: dev
+  # Cargo's vendored libgit2 cannot check out the `pet` dependency on Windows:
+  # its conda fixtures exceed MAX_PATH. The git CLI honours core.longpaths.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must precede any cargo invocation, including the cache action's
+      # `cargo metadata`.
+      - name: Enable long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force | Out-Null
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.os }}
+          cache-on-failure: true
+
+      - name: Build
+        run: cargo build --release --package zed --package cli
+
+      # zed's build script downloads conpty and drops it beside the binary; the
+      # integrated terminal will not open without these two files.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rel = "target/release"
+          $version = (Get-Item "$rel/zed.exe").VersionInfo.ProductVersion
+          if ($version -notmatch '\+dev\.') {
+            throw "refusing to publish: expected a dev-channel build, got '$version'. " +
+                  "A stable-channel binary would auto-update itself and discard the patch."
+          }
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/
+          $name = "zed-claude-code-windows-x64"
+          Compress-Archive -Path staging/* -DestinationPath "$name.zip" -Force
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" |
+            Out-File "$name.zip.sha256" -Encoding ascii
+          "built $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-claude-code-${{ matrix.os }}
+          path: |
+            *.zip
+            *.zip.sha256
+          if-no-files-found: error

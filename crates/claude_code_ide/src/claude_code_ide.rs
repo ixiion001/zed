@@ -174,6 +174,26 @@ impl ClaudeCodeIdeServer {
             .detach();
         }
 
+        // Reaching here means the listener is beyond saving while the window is
+        // still open, so the port has to be withdrawn: terminals opened from now
+        // on would otherwise export CLAUDE_CODE_SSE_PORT for a port nothing
+        // answers on, and the CLI would try to connect and fail instead of
+        // simply running without the integration.
+        //
+        // The lock file goes first, so a failure to reach the project cannot
+        // leave one behind advertising a dead port. Clearing the cell after it
+        // also makes `remove_lockfile` in Drop a no-op rather than a double
+        // removal.
+        lockfile::remove(port).log_err();
+        port_cell.set(None);
+        workspace
+            .update(cx, |workspace, cx| {
+                workspace
+                    .project()
+                    .update(cx, |project, _| project.set_claude_code_ide_port(None));
+            })
+            .ok();
+
         Ok(())
     }
 

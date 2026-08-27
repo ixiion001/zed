@@ -107,28 +107,15 @@ Windows is therefore the only machine that can build locally — worth rememberi
 its toolchain. Running the editor needs no toolchain at all, which is why the Mac and Linux boxes test
 artifacts rather than producing them.
 
-## Where the plan lives
+## Working on this repo
 
-`docs/claude-code/plan.md` is the authoritative record: tasklist with gates, decisions, pinned
-versions. `docs/claude-code/build-history.md` carries the root-cause notes for the four Windows bugs
-fixed here. Read them before proposing work — most obvious questions are answered there, with evidence.
+More than one agent session may be working here at once, on different machines. None of them creates
+branches, commits, pushes or dispatches workflows without the maintainer coordinating it — two agents
+force-pushing one branch is an expensive way to lose an afternoon. Propose diffs and let the
+maintainer relay them. **Agent-to-agent `SendMessage` does not work across independent Claude Code
+sessions** (separate session trees, no shared registry), so relaying happens through the maintainer or
+through commits to this repo.
 
-## Coordination — two sessions are working this repo
-
-| Session | Machine | Owns |
-|---|---|---|
-| Windows | `<windows-workspace>` | `main-patched`, CI, `cc-release.yml`, the updater scripts |
-| macOS (`macos-host`) | Apple silicon | the macOS leg in `cc-release.yml`, `script/claude-ide-probe.py`, and testing artifacts — it cannot build (no Xcode) |
-
-**Where things stand (2026-08-27).** Gate 1 is closed and **`cc-v1.16.3-1` is published as a
-prerelease** — Windows only, verified end to end from the published assets. `/releases/latest` returns
-404 while only prereleases exist, which is the promotion gate working as designed. So the Windows leg
-is done and the macOS leg is the critical path; a `.app` that launches and auto-connects is all that
-Gate 2 needs. Adding macOS to the release is then a matter of extending the `build` matrix in
-`cc-release.yml` — the `publish` job already collects every platform's artifacts into one release.
-
-Neither session creates branches, commits, pushes or dispatches workflows without the maintainer coordinating
-it — two agents force-pushing one branch is an expensive way to lose an afternoon. Propose diffs and
-let him relay. **Agent-to-agent `SendMessage` does not work across independent Claude Code sessions**
-(separate session trees, no shared registry), so relaying happens through the maintainer or through commits
-to this repo.
+Planning notes, the tasklist and the root-cause write-ups for the four Windows bugs are kept outside
+this repository. Ask the maintainer for them rather than assuming an undocumented decision was
+arbitrary.

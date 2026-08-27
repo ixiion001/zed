@@ -49,6 +49,28 @@ function Get-Sha256([string] $Path) {
     finally { $stream.Dispose(); $sha.Dispose() }
 }
 
+# Two identical-looking zed.exe files on one machine is a trap: a local build tree
+# and this install are both just "Zed" in the Start Menu, and launching the wrong
+# one looks exactly like an update that did not apply. Give this one a name that
+# says what it is.
+function Set-StartMenuShortcut {
+    $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    $link = Join-Path $startMenu 'Zed (Claude Code).lnk'
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($link)
+        if ($shortcut.TargetPath -eq $exe) { return }
+        $shortcut.TargetPath = $exe
+        $shortcut.WorkingDirectory = $InstallDir
+        $shortcut.Description = 'Zed with Claude Code IDE integration (unofficial build)'
+        $shortcut.Save()
+        Write-Host "start menu  : Zed (Claude Code)"
+    } catch {
+        # Not worth failing an otherwise good update over.
+        Write-Warning "could not create the Start Menu shortcut: $($_.Exception.Message)"
+    }
+}
+
 # The build stamps its commit into the version, e.g. 1.16.3+dev.2.<40 hex chars>.
 # Comparing that against the release's commit keeps this stateless: it stays
 # correct even for an install someone unzipped by hand.
@@ -101,6 +123,7 @@ $label = if ($release.prerelease) { "$($release.tag_name) (prerelease)" } else {
 Write-Host "latest      : $label  $($commit.Substring(0, 10))"
 
 if ($commit -eq $installed) {
+    if (-not $DryRun) { Set-StartMenuShortcut }
     Write-Host 'up to date.'
     exit 0
 }
@@ -172,6 +195,8 @@ foreach ($file in Get-ChildItem $staging -File) {
 
 Remove-Item $temp -Recurse -Force
 
+Set-StartMenuShortcut
+
 $now = (Get-Item $exe).VersionInfo.ProductVersion
 Write-Host "installed   : $now"
-Write-Host "done. Restart Zed from $exe"
+Write-Host "done. Restart Zed from the Start Menu entry, or from $exe"

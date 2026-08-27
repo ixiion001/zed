@@ -649,10 +649,48 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn file_uri_leaves_backslashes_alone_off_windows() {
-        // `\` is an ordinary character in a posix file name; rewriting it would
-        // invent a directory boundary that does not exist.
-        assert_eq!(file_uri(r"/home/user/we\ird.txt"), r"file:///home/user/we\ird.txt");
+    fn file_uri_escapes_backslashes_off_windows() {
+        // `\` is an ordinary character in a posix file name, so it must not
+        // become a directory boundary -- but it is not legal unescaped in a URI
+        // either. Percent-encoding satisfies both: no boundary is invented, and
+        // the name comes back intact.
+        let path = r"/home/user/we\ird.txt";
+        assert_eq!(file_uri(path), "file:///home/user/we%5Cird.txt");
+        assert_eq!(path_from_uri(&file_uri(path)), path);
+    }
+
+    #[test]
+    fn file_uri_escapes_what_would_otherwise_change_the_uri() {
+        // Unescaped, `?` opens a query and `#` a fragment, so the CLI would
+        // resolve a shorter path than the one we named; a space is simply not
+        // legal. `:` stays readable so a drive letter reads as `C:`.
+        assert_eq!(file_uri("/home/user/what?.rs"), "file:///home/user/what%3F.rs");
+        assert_eq!(file_uri("/home/user/a#b.rs"), "file:///home/user/a%23b.rs");
+        assert_eq!(file_uri("/home/user/my notes.rs"), "file:///home/user/my%20notes.rs");
+        assert_eq!(file_uri("/home/user/plain.rs"), "file:///home/user/plain.rs");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn path_from_uri_round_trips_awkward_names() {
+        for path in [
+            "/home/user/my notes.rs",
+            "/home/user/a#b.rs",
+            "/home/user/what?.rs",
+            "/home/user/100% done.rs",
+            "/home/user/\u{fc}n\u{ef}c\u{f8}de.rs",
+        ] {
+            assert_eq!(path_from_uri(&file_uri(path)), path, "round trip of {path}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn path_from_uri_leaves_an_incomplete_escape_alone() {
+        // `%zz` is not an escape, and a path we never encoded still has to
+        // survive -- the CLI sometimes sends one.
+        assert_eq!(path_from_uri("file:///home/user/100%zz.rs"), "/home/user/100%zz.rs");
+        assert_eq!(path_from_uri("file:///home/user/trailing%"), "/home/user/trailing%");
     }
 
     #[test]

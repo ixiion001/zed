@@ -47,11 +47,17 @@ Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.16.3-1`. Push tags to **`f
 
 ## Traps that cost real time
 
-1. **Release channel.** `crates/zed/RELEASE_CHANNEL` says `stable`, and `script/bundle-mac:54` /
-   `bundle-windows.ps1:61` export it as `ZED_RELEASE_CHANNEL`. A release build uses that compile-time
-   value with no runtime override — so a bundle-script build ships a **stable-channel binary with
-   auto-update live**, which downloads official Zed over itself and silently deletes the patch.
-   Always build with `ZED_RELEASE_CHANNEL=dev`; verify the result is stamped `+dev.`.
+1. **Release channel — the file wins, and `ZED_RELEASE_CHANNEL=dev` alone does not work.** A
+   stable-channel build has auto-update live and downloads official Zed over itself, silently
+   deleting the patch. Two mechanisms decide the channel and only one reads the environment:
+   `crates/release_channel/build.rs` bakes in `$ZED_RELEASE_CHANNEL` **only if it is set at build
+   time**, else `include_str!` of `crates/zed/RELEASE_CHANNEL`; and every bundle script
+   (`bundle-mac:52-54`, `bundle-windows.ps1:61`, `bundle-linux`) reads that file and **exports its
+   contents over the environment**. So `ZED_RELEASE_CHANNEL=dev script/bundle-mac` bakes in whatever
+   the file says. Plain `cargo build` is the only path the env var governs, which is why the Windows
+   leg is safe. ⇒ **`echo dev > crates/zed/RELEASE_CHANNEL` before any bundle script** — what the
+   Linux and macOS legs do. Verify the artifact, never the intent: `+dev.` in the Windows version
+   string, `zed-dev.app/` in the Linux tarball, `CFBundleIdentifier == dev.zed.Zed-Dev` on macOS.
 2. **File modes on Windows.** `core.symlinks=false` makes symlinked files look like ordinary ones. Check
    `git ls-files -s <path>` before committing anything that upstream may ship as a symlink — see the
    note at the top of this file, which is exactly the mistake that produced it.
@@ -85,6 +91,21 @@ Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.16.3-1`. Push tags to **`f
    ```powershell
    [System.IO.File]::WriteAllText("$PWD/$name.zip.sha256", "$hash  $name.zip`n")
    ```
+9. **`script/bundle-mac -i` is broken for release builds.** Local-install moves the `.app` to
+   `/Applications` at line 229, then the DMG branch `mv`s a path that no longer exists and `set -e`
+   aborts. Only `-d` (debug) skips the DMG. Note also that the dev-channel bundle is **`Zed Dev.app`**
+   / `dev.zed.Zed-Dev`, not `Zed.app` — it coexists with official Zed and keeps its own settings.
+
+## Building
+
+macOS needs **full Xcode**, not just Command Line Tools: `crates/gpui_macos/build.rs:132` compiles the
+Metal shaders with `xcrun -sdk macosx metal`, which CLT does not ship. The Mac has CLT only and no room
+for Xcode, so **macOS builds in CI**, where the runner has Xcode, cmake and Node preinstalled. Linux
+builds in CI too.
+
+Windows is therefore the only machine that can build locally — worth remembering before step F reclaims
+its toolchain. Running the editor needs no toolchain at all, which is why the Mac and Linux boxes test
+artifacts rather than producing them.
 
 ## Where the plan lives
 
@@ -97,7 +118,7 @@ fixed here. Read them before proposing work — most obvious questions are answe
 | Session | Machine | Owns |
 |---|---|---|
 | Windows | `<windows-workspace>` | `main-patched`, CI, `cc-release.yml`, the updater scripts |
-| macOS (`macos-host`) | Apple silicon | the macOS leg: toolchain, `script/bundle-mac`, producing a known-good recipe |
+| macOS (`macos-host`) | Apple silicon | the macOS leg in `cc-release.yml`, `script/claude-ide-probe.py`, and testing artifacts — it cannot build (no Xcode) |
 
 **Where things stand (2026-08-27).** Gate 1 is closed and **`cc-v1.16.3-1` is published as a
 prerelease** — Windows only, verified end to end from the published assets. `/releases/latest` returns

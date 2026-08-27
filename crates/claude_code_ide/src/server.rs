@@ -14,7 +14,7 @@ use async_tungstenite::tungstenite::{
     handshake::server::{ErrorResponse, Request, Response},
     http,
 };
-use futures::{AsyncRead, AsyncWrite, StreamExt as _};
+use futures::{AsyncRead, AsyncWrite, StreamExt as _, select, stream::FuturesUnordered};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -141,24 +141,59 @@ where
         .await
         .context("websocket handshake failed")?;
 
-    let (mut outgoing, mut incoming) = websocket.split();
+    let (mut outgoing, incoming) = websocket.split();
+    // Fused once here rather than per iteration, so `select!` below gets a
+    // `FusedFuture` without re-fusing a future it may not poll to completion.
+    let mut incoming = incoming.fuse();
 
-    while let Some(message) = incoming.next().await {
-        match message.context("reading websocket frame")? {
-            Message::Text(text) => {
-                if let Some(response) = handle_message(text.as_str(), &dispatcher).await {
-                    outgoing
-                        .send(Message::Text(response.into()))
-                        .await
-                        .context("sending response")?;
-                }
+    // Tool calls run concurrently instead of one at a time. Awaiting a handler
+    // inline used to stop the loop reading altogether, so a call that waits on
+    // the user -- openDiff blocks until Keep or Reject -- also stopped keepalive
+    // pongs and every later request until the CLI gave up on us. Requests carry
+    // an id and JSON-RPC does not require responses in order, so finishing them
+    // as they complete is what the protocol already expects.
+    //
+    // Nothing bounds how many run at once. The only client is the CLI that read
+    // our lock file, so the ceiling is whatever that one process asks for.
+    let mut in_flight = FuturesUnordered::new();
+    let dispatcher = &dispatcher;
+
+    // Both branches borrow state the handlers below also need, so the borrows
+    // have to end before the handler runs -- hence resolving to a value here and
+    // acting on it after the `select!` has dropped its futures.
+    enum Event {
+        Closed,
+        Frame(Message),
+        Finished(Option<String>),
+    }
+
+    loop {
+        let event = select! {
+            frame = incoming.next() => match frame {
+                None => Event::Closed,
+                Some(message) => Event::Frame(message.context("reading websocket frame")?),
+            },
+            finished = in_flight.select_next_some() => Event::Finished(finished),
+        };
+
+        match event {
+            Event::Closed => break,
+            Event::Frame(Message::Text(text)) => {
+                in_flight.push(async move { handle_message(text.as_str(), dispatcher).await });
             }
             // Reply to keepalive pings so the CLI doesn't consider us dead.
-            Message::Ping(payload) => {
+            Event::Frame(Message::Ping(payload)) => {
                 outgoing.send(Message::Pong(payload)).await.context("sending pong")?;
             }
-            Message::Close(_) => break,
-            _ => {}
+            Event::Frame(Message::Close(_)) => break,
+            Event::Frame(_) => {}
+            Event::Finished(Some(response)) => {
+                outgoing
+                    .send(Message::Text(response.into()))
+                    .await
+                    .context("sending response")?;
+            }
+            Event::Finished(None) => {}
         }
     }
 

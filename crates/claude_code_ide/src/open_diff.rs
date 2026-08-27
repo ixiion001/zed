@@ -193,8 +193,19 @@ pub async fn open_diff(
         })
         .map_err(|error| ProtocolError::internal(error.to_string()))?;
 
-    // Block until the user clicks Keep/Reject. A dropped sender (e.g. window
-    // closed) resolves to `false`, i.e. rejected.
+    // Hand the sender over entirely to the Keep and Reject callbacks, which took
+    // their own clones above. Holding this one across the await keeps the
+    // channel open no matter what the user does, so the "dropped sender" case
+    // below could never actually happen: dismissing the notification with its X
+    // -- shown by default -- or suppressing it destroys both callbacks and
+    // nothing else would ever resolve the receiver. The request then hangs
+    // forever, and because the read loop awaits each message in turn, the whole
+    // connection hangs with it.
+    drop(decision_tx);
+
+    // Block until the user clicks Keep/Reject. A dropped sender -- window
+    // closed, or the notification dismissed without choosing -- resolves to
+    // `false`, i.e. rejected.
     let accepted = decision_rx.await.unwrap_or(false);
 
     // Read the final buffer contents (the user may have edited the proposed

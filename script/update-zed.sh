@@ -262,7 +262,11 @@ if [ -e "$APP" ]; then
     mv "$APP" "$APP.old-$stamp"
 fi
 mv "$new" "$APP"
-rm -rf "$APP.old-$stamp"
+# The old bundle is deliberately left behind. A running Zed still has its
+# frameworks and resources mapped from that path, and deleting it here pulls
+# them out from under a live process -- the exact failure the rename above
+# exists to avoid. The sweep near the top of this script collects it on the next
+# run, by which time nothing is using it.
 
 if [ "$PLATFORM" = macos ]; then
     # Ad-hoc signed, so the download carries a quarantine flag and macOS reports

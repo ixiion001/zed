@@ -1,0 +1,299 @@
+# Watches upstream Zed for a new stable release and rebases this fork's patch
+# series onto it, weekly.
+#
+# The point of the fork is a patch that stays current. Zed ships roughly weekly,
+# and doing this by hand means noticing the release, rebasing, and discovering
+# any API break during a two-hour build. This does the noticing and the
+# discovering, and stops the moment anything looks wrong.
+#
+# It cannot ship anything on its own. Every path ends either at a branch plus an
+# issue asking for a decision, or at an issue explaining why it stopped. The main
+# line is never touched: work happens on `auto/v<tag>`, which is disposable and
+# force-pushed freely.
+#
+# Why it stops short of publishing: a tag pushed with GITHUB_TOKEN does not start
+# another workflow run -- GitHub suppresses that so workflows cannot trigger each
+# other in a loop. This job therefore cannot fire cc-release.yml by tagging, and
+# the last step is a command for a human to run. Closing that gap means giving
+# cc-release.yml a `workflow_call:` trigger and calling it from here, which is
+# worth doing once this has proven itself.
+#
+# Note on the heredocs below: their terminators sit at the *base* indentation of
+# the `run:` block, not the indentation of the surrounding `if`. YAML strips the
+# block's common indent, which puts the terminator at column 0 where the shell
+# needs it. Indenting them to match the `if` closes the YAML block scalar early
+# and the file stops parsing.
+name: auto-rebase
+
+on:
+  schedule:
+    # Mondays 06:00 UTC. Zed's releases land midweek, so this picks up the
+    # previous week's release after a few days of other people finding its bugs.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      target_tag:
+        description: Upstream tag to rebase onto (blank = newest stable)
+        required: false
+        default: ""
+
+# Naming any scope sets the rest to none, so both are explicit: `contents` to
+# push the auto branch, `issues` to report what happened.
+permissions:
+  contents: write
+  issues: write
+
+# A rebase plus a full crate build runs over an hour. Two racing would fight over
+# the same auto branch for no benefit.
+concurrency:
+  group: auto-rebase
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main-patched
+          # The rebase needs real history, and `git describe` needs the upstream
+          # tag this series currently sits on.
+          fetch-depth: 0
+
+      - name: Work out where we are and where upstream is
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.target_tag }}
+        run: |
+          set -euo pipefail
+
+          # /releases/latest is defined to exclude prereleases and drafts, which
+          # is the filter wanted here -- picking the newest tag by name would
+          # happily grab a `-pre`.
+          if [ -n "$REQUESTED" ]; then
+            new="$REQUESTED"
+          else
+            new=$(gh api repos/zed-industries/zed/releases/latest --jq .tag_name)
+          fi
+
+          # `gh issue create --label` fails outright if the label is missing,
+          # which would turn every report below into a second failure that
+          # reports nothing. --force makes this idempotent.
+          gh label create auto-rebase --color 0e8a16 --force \
+            --description "Opened by the weekly auto-rebase job" >/dev/null 2>&1 || true
+
+          # A fork does not inherit upstream's tags, and `git describe` needs
+          # them to say which release this series was built on. The refspec keeps
+          # this to tags; `--tags` would also drag in every upstream branch.
+          git remote add upstream https://github.com/zed-industries/zed.git
+          git fetch --no-tags upstream "refs/tags/v*:refs/tags/v*"
+
+          if ! git rev-parse -q --verify "refs/tags/$new" >/dev/null; then
+            echo "upstream tag $new does not exist" >&2
+            exit 1
+          fi
+
+          base=$(git describe --tags --match 'v*' --abbrev=0)
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          {
+            echo "current base : $base"
+            echo "upstream     : $new"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$base" = "$new" ]; then
+            echo "already-current=true" >> "$GITHUB_OUTPUT"
+            echo "Already on the newest stable release; nothing to do." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "already-current=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Every later step carries this guard. The common weekly case is that
+      # upstream has not shipped, and that case must cost seconds rather than an
+      # hour of runner time.
+      - name: Rebase the patch series
+        id: rebase
+        if: steps.target.outputs.already-current == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.target.outputs.base }}
+          NEW: ${{ steps.target.outputs.new }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "auto/$NEW"
+
+          # --onto replays only our commits: everything after the old upstream
+          # tag, replanted on the new one. Rebasing against the branch instead
+          # would try to replay upstream's own commits onto themselves.
+          if git rebase --onto "$NEW" "$BASE"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
+          git rebase --abort
+
+          title="auto-rebase: $NEW conflicts with the patch series"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
+            echo "issue already open" && exit 1
+          fi
+
+          cat > issue.md <<BODY
+          Rebasing this fork's patch series from \`$BASE\` onto \`$NEW\` hit
+          conflicts, so nothing was built and no branch was pushed.
+
+          Conflicting files:
+
+          $conflicts
+
+          The patch is one new crate plus a 43-line graft into existing Zed code,
+          and only the graft can realistically conflict, so the file list usually
+          names the fix. To resolve locally:
+
+          \`\`\`
+          git fetch fork && git fetch upstream --tags
+          git checkout -b auto/$NEW main-patched
+          git rebase --onto $NEW $BASE
+          \`\`\`
+
+          Re-run [auto-rebase](../../actions/workflows/auto-rebase.yml) once
+          \`main-patched\` moves, or leave this open -- the weekly run will not
+          open a second copy.
+          BODY
+          gh issue create --title "$title" --label auto-rebase --body-file issue.md
+          exit 1
+
+      - name: Install Linux build dependencies
+        if: steps.target.outputs.already-current == 'false'
+        run: ./script/linux
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.target.outputs.already-current == 'false'
+        with:
+          # Deliberately shared with the release workflow's Linux leg: both
+          # compile the same dependency graph, and a cold cache turns this job
+          # from minutes into an hour.
+          key: release-ubuntu-24.04
+          cache-on-failure: true
+
+      # Split from the test step because it fails in about a minute on the thing
+      # a version bump actually breaks -- a changed Zed API -- rather than after
+      # a full test build.
+      - name: Check the crate against the new Zed
+        id: check
+        if: steps.target.outputs.already-current == 'false'
+        run: |
+          # Without pipefail the step takes tee's exit status, so a failing check
+          # would report success and this gate would pass everything through.
+          set -o pipefail
+          cargo check --package claude_code_ide 2>&1 | tee check.log
+
+      - name: Test the crate
+        id: test
+        if: steps.target.outputs.already-current == 'false'
+        run: |
+          set -o pipefail
+          cargo test --package claude_code_ide -- --nocapture 2>&1 | tee test.log
+
+      # `failure()` alone would also fire for a rebase conflict, which has
+      # already opened its own issue; the guard keeps the two reports separate.
+      - name: Report a build or test failure
+        if: failure() && steps.rebase.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.target.outputs.base }}
+          NEW: ${{ steps.target.outputs.new }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          set -uo pipefail
+          if [ "$CHECK_OUTCOME" = "failure" ]; then
+            stage="cargo check"; log=check.log
+          else
+            stage="cargo test"; log=test.log
+          fi
+
+          # The first error is the one worth reading: the rest are usually the
+          # same API break echoing through the file, and a whole cargo log would
+          # not fit in an issue body.
+          excerpt=$(grep -m1 -A 20 -E '^error' "$log" 2>/dev/null \
+            || tail -40 "$log" 2>/dev/null \
+            || echo "no log captured")
+
+          title="auto-rebase: $NEW fails $stage"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
+            echo "issue already open" && exit 0
+          fi
+
+          cat > issue.md <<BODY
+          The patch series rebased cleanly from \`$BASE\` onto \`$NEW\`, but
+          \`$stage\` failed, so nothing was pushed or built.
+
+          This is what the job exists to catch: upstream changed an API the
+          \`claude_code_ide\` crate uses, and the editor would not have compiled.
+
+          \`\`\`
+          $excerpt
+          \`\`\`
+
+          Full log: [run ${{ github.run_id }}](../../actions/runs/${{ github.run_id }}).
+          BODY
+          gh issue create --title "$title" --label auto-rebase --body-file issue.md
+
+      - name: Push the branch and ask for a release
+        if: success() && steps.target.outputs.already-current == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.target.outputs.base }}
+          NEW: ${{ steps.target.outputs.new }}
+        run: |
+          set -euo pipefail
+          # auto/* branches are scratch space, so a re-run replaces one freely.
+          # The main line is never force-pushed.
+          git push --force origin "auto/$NEW"
+
+          title="auto-rebase: $NEW is ready to release"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
+            echo "issue already open" && exit 0
+          fi
+
+          cat > issue.md <<BODY
+          \`auto/$NEW\` carries this fork's patch series rebased from \`$BASE\`
+          onto upstream \`$NEW\`. It compiles and its tests pass.
+
+          Nothing has been built or published. To cut the prerelease:
+
+          \`\`\`
+          git fetch fork
+          git checkout auto/$NEW
+          git tag -a cc-$NEW-1 -m "Zed ${NEW#v} + Claude Code IDE"
+          git push fork cc-$NEW-1
+          \`\`\`
+
+          That starts [cc-release](../../actions/workflows/cc-release.yml), which
+          builds all three platforms and publishes a **prerelease** -- invisible
+          to \`/releases/latest\`, so no machine updates itself to it. Once you
+          have run it:
+
+          \`\`\`
+          gh release edit cc-$NEW-1 --prerelease=false
+          git checkout main-patched && git merge --ff-only auto/$NEW
+          git push fork main-patched
+          \`\`\`
+
+          Tagging is manual because a tag pushed by this job would not start
+          cc-release: GitHub does not let a run started by \`GITHUB_TOKEN\`
+          trigger another run.
+          BODY
+          gh issue create --title "$title" --label auto-rebase --body-file issue.md

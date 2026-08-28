@@ -4,6 +4,9 @@
 Run the real `claude` CLI in Zed's integrated terminal and it connects on its own — your selection,
 diagnostics and Keep/Reject diffs appear in the editor.
 Prebuilt for Windows, macOS and Linux.
+Zed's own code is barely touched: the integration is a self-contained crate plus an
+**85-line graft**, which is what lets this build follow upstream Zed rather than drift away
+from it.
 
 > Not affiliated with, endorsed by, or supported by Zed Industries. This is a personal fork.
 > For official Zed, go to [zed.dev](https://zed.dev) or

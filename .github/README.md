@@ -74,11 +74,11 @@ instead of failing.
 - **No auto-update**, by design — see above.
 - **Tracks Zed stable, one or two releases behind.** A weekly job rebases onto each new upstream
   stable; see the [changelog](CHANGELOG.md) for what a given release is built on.
-- **The Linux build has never been launched on a desktop.** The artifact is verified — the binary
-  runs, reports the right channel and commit, and its only unbundled dependency is `libasound2t64`
-  — and the updater is tested end to end. But no one has yet started the editor on real graphics
-  hardware, so the GUI and the integration are unproven there. Reports from an actual desktop are
-  the most useful thing anyone could send.
+- **Linux is verified headlessly, not on real graphics hardware.** The editor starts and the
+  integration connects under Xvfb with software rendering; the artifact checks out too — the binary
+  reports the right channel and commit, its only unbundled dependency is `libasound2t64`, and the
+  updater installs and self-detects. What is untested is a real GPU and a real desktop session.
+  Reports from one are welcome.
 - Best-effort support. [Issues](../../issues) are open.
 
 ## How it works

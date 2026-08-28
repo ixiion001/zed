@@ -328,10 +328,24 @@ jobs:
           have run it:
 
           \`\`\`
-          gh release edit cc-$NEW-1 --prerelease=false
-          git checkout main-patched && git merge --ff-only auto/$NEW
-          git push fork main-patched
+          gh release edit cc-$NEW-1 --prerelease=false --latest
+          git checkout main-patched && git reset --hard auto/$NEW
+          git push --force-with-lease fork main-patched
           \`\`\`
+
+          Adopting is a **reset, not a merge**. \`auto/$NEW\` is this series
+          replayed onto a new base, so its commits are new objects and
+          \`main-patched\` is not an ancestor of it -- \`merge --ff-only\`
+          cannot work. That force-push rewrites the branch every other clone is
+          sitting on, so tell the other machines before you run it; each one
+          recovers with \`git fetch && git reset --hard <remote>/main-patched\`,
+          never \`git pull\`.
+
+          Finally, \`.github/README.md\` names the base tag in its compare link
+          and its \`git fetch zed tag\` line. Point both at \`$NEW\`.
+
+          (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
+          the others. Use whichever points at ixiion001/zed.)
 
           Tagging is manual because a tag pushed by this job would not start
           cc-release: GitHub does not let a run started by \`GITHUB_TOKEN\`

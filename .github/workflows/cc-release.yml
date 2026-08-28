@@ -321,6 +321,26 @@ jobs:
           upstream="${TAG#cc-v}"
           upstream="${upstream%-*}"
 
+          # The source delta beside the binaries: everything this build changes
+          # in upstream Zed and nothing else, pinned to this tag rather than to
+          # a branch that keeps moving. GitHub generates it, so there is no
+          # checkout here to generate it from -- see the GH_REPO note above for
+          # why this job has no git remote.
+          #
+          # Deliberately non-fatal. The binaries are the release; a source diff
+          # is not allowed to be the thing that sinks a job two hours deep.
+          diff="zed-claude-code-$TAG.diff"
+          if gh api "repos/zed-industries/zed/compare/v$upstream...ixiion001:$TAG" \
+               -H "Accept: application/vnd.github.v3.diff" > "dist/$diff" \
+             && [ -s "dist/$diff" ]; then
+            gzip -9 "dist/$diff"
+            ( cd dist && sha256sum "$diff.gz" > "$diff.gz.sha256" )
+            echo "attached $diff.gz ($(wc -c < "dist/$diff.gz") bytes)"
+          else
+            echo "::warning::could not generate $diff; publishing without it"
+            rm -f "dist/$diff"
+          fi
+
           # Quoted heredoc: the body is full of backticks, which an unquoted one
           # would try to execute. Placeholders are filled in afterwards.
           cat > notes.md <<'NOTES'
@@ -333,7 +353,10 @@ jobs:
 
           Everything that differs from official Zed, and nothing else:
           [v@UPSTREAM@ ... this build](https://github.com/zed-industries/zed/compare/v@UPSTREAM@...ixiion001:@TAG@).
-          One new crate, plus an 85-line graft into existing Zed code.
+          One new crate, plus an 85-line graft into existing Zed code. The same
+          diff is attached as `zed-claude-code-@TAG@.diff.gz` -- `gunzip` it and
+          `git apply` it to a checkout of upstream `v@UPSTREAM@` to rebuild this
+          from source yourself.
 
           ### Install — Windows
 

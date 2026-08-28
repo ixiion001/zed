@@ -40,6 +40,7 @@ rebasing onto a new Zed release costs ~10 lines rather than a day.
 |---|---|
 | `.github/workflows/cc-release.yml` | **ours.** Builds on `cc-v*` tags, publishes a prerelease |
 | `.github/workflows/claude-code-ide.yml` | **ours.** Tests the crate on three platforms |
+| `.github/workflows/auto-rebase.yml` | **ours.** Weekly: rebases onto each new upstream stable, checks and tests it, then opens an issue. Never publishes — see the note in its header on why a `GITHUB_TOKEN` tag push cannot start `cc-release` |
 | `.github/workflows/release.yml` and every other file there | **upstream's — leave alone** |
 
 Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.16.3-1`. Push tags to **`fork`**; `origin` is

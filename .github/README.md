@@ -102,7 +102,8 @@ line of the difference, nothing else:
 [`zed-industries/zed@v1.17.2 ... ixiion001:main-patched`](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched)
 
 To download the change rather than read it, append the format to that URL. GitHub generates both
-on demand, so they are never out of date with the branch:
+on demand, so they are never out of date with the branch. Every release from `cc-v1.17.2-1` on also
+**attaches the same diff**, gzipped and pinned to that build, so a release stays self-contained:
 
 - [**`.diff`**](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched.diff)
   — one flat diff, about 200 KB. `git apply` it to a checkout of upstream `v1.17.2` and you have

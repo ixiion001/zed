@@ -197,7 +197,15 @@ jobs:
           \`main-patched\` moves, or leave this open -- the weekly run will not
           open a second copy.
           BODY
-          gh issue create --title "$title" --label auto-rebase --body-file issue.md
+          # Created without --label, then labelled separately. `gh issue create`
+          # resolves label names through GraphQL, which can lag the REST write
+          # that creates the label by a few seconds -- and did, the first time
+          # this job ran: the label existed, the lookup said it did not, and the
+          # whole report was lost. On these paths the issue is the only thing the
+          # job produces, so nothing cosmetic is allowed to be able to sink it.
+          url=$(gh issue create --title "$title" --body-file issue.md)
+          echo "$url"
+          gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
           exit 1
 
       - name: Install Linux build dependencies
@@ -274,7 +282,15 @@ jobs:
 
           Full log: [run ${{ github.run_id }}](../../actions/runs/${{ github.run_id }}).
           BODY
-          gh issue create --title "$title" --label auto-rebase --body-file issue.md
+          # Created without --label, then labelled separately. `gh issue create`
+          # resolves label names through GraphQL, which can lag the REST write
+          # that creates the label by a few seconds -- and did, the first time
+          # this job ran: the label existed, the lookup said it did not, and the
+          # whole report was lost. On these paths the issue is the only thing the
+          # job produces, so nothing cosmetic is allowed to be able to sink it.
+          url=$(gh issue create --title "$title" --body-file issue.md)
+          echo "$url"
+          gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
 
       - name: Push the branch and ask for a release
         if: success() && steps.target.outputs.already-current == 'false'
@@ -321,4 +337,12 @@ jobs:
           cc-release: GitHub does not let a run started by \`GITHUB_TOKEN\`
           trigger another run.
           BODY
-          gh issue create --title "$title" --label auto-rebase --body-file issue.md
+          # Created without --label, then labelled separately. `gh issue create`
+          # resolves label names through GraphQL, which can lag the REST write
+          # that creates the label by a few seconds -- and did, the first time
+          # this job ran: the label existed, the lookup said it did not, and the
+          # whole report was lost. On these paths the issue is the only thing the
+          # job produces, so nothing cosmetic is allowed to be able to sink it.
+          url=$(gh issue create --title "$title" --body-file issue.md)
+          echo "$url"
+          gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true

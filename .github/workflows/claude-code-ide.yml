@@ -42,7 +42,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event.inputs.platforms || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Must precede any cargo invocation, including the cache action's
       # `cargo metadata`. See Zed's own Windows build troubleshooting.

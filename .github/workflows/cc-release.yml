@@ -82,6 +82,19 @@ jobs:
             throw "refusing to publish: expected a dev-channel build, got '$version'. " +
                   "A stable-channel binary would auto-update itself and discard the patch."
           }
+          # The channel check above is the one that must never be bypassed. This
+          # second one guards a different mistake -- publishing a binary built
+          # from a commit other than the one being tagged. It warns rather than
+          # fails when the version format is unrecognised, so an upstream change
+          # to how the string is composed cannot block a release that is
+          # otherwise sound; a commit that is present and *wrong* still fails.
+          if ($version -match '([0-9a-f]{7,40})\s*$') {
+            if (-not $env:GITHUB_SHA.StartsWith($Matches[1])) {
+              throw "refusing to publish: '$version' was not built from $env:GITHUB_SHA"
+            }
+          } else {
+            Write-Output "::warning::could not read a commit out of '$version'; skipping the commit check"
+          }
           New-Item -ItemType Directory -Force -Path staging | Out-Null
           Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/
           $name = "zed-claude-code-windows-x86_64"
@@ -227,6 +240,32 @@ jobs:
             exit 1
           fi
 
+          # The check above proves what the packaging *named* things. Running the
+          # binary proves what was compiled into it, and prints the commit as
+          # well: `Zed dev <version> <sha>`. --version needs no display, and
+          # script/linux has already installed libasound2-dev, so the one runtime
+          # dependency this bundle does not carry is present.
+          #
+          # This is the only leg that can run what it built, which makes it the
+          # strongest of the three guards: one command covering a wrong channel,
+          # a wrong commit, and a binary that will not start at all.
+          probe=$(mktemp -d)
+          tar -xzf "$name" -C "$probe"
+          reported=$("$probe/zed-dev.app/bin/zed" --version)
+          rm -rf "$probe"
+          echo "reported: $reported"
+          case "$reported" in
+            "Zed dev "*) ;;
+            *) echo "refusing to publish: expected a dev-channel build, got '$reported'" >&2
+               echo "A stable-channel binary would auto-update itself and discard the patch." >&2
+               exit 1 ;;
+          esac
+          case "$reported" in
+            *"$GITHUB_SHA"*) ;;
+            *) echo "refusing to publish: '$reported' was not built from $GITHUB_SHA" >&2
+               exit 1 ;;
+          esac
+
           sha256sum "$name" > "$name.sha256"
           echo "built $name ($(du -h "$name" | cut -f1))" | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -264,7 +303,7 @@ jobs:
       # The archives round-trip through artifact storage, so check the hash we
       # are about to publish against the bytes we are about to publish.
       - name: Verify checksums
-        run: cd dist && sha256sum -c *.sha256
+        run: cd dist && sha256sum -c ./*.sha256
 
       # Always a prerelease, never conditionally. `/releases/latest` excludes
       # prereleases, so this one flag is what stops a machine updating itself to

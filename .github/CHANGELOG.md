@@ -57,12 +57,13 @@ In the tooling:
 |---|---|---|---|
 | Windows | 1 h 20 m | `update-zed.ps1`, with the editor open | connected |
 | macOS | 2 h 11 m | `update-zed.sh` | 29/29 protocol checks |
-| Linux | 1 h 18 m | `update-zed.sh`, unprivileged, in `ubuntu:24.04` | artifact only — see below |
+| Linux | 1 h 18 m | `update-zed.sh`, unprivileged, in `ubuntu:24.04` | connected, headless under Xvfb |
 
 The Linux binary was executed (`bin/zed --version` reports `Zed dev 1.16.3 95c83f3ada…`, confirming
 the dev channel is compiled in), its dependencies resolved on a stock Ubuntu 24.04 image with only
-`libasound2t64` added, and the updater run end to end. **The Linux GUI has not been launched**; see
-the limitations in the [README](README.md).
+`libasound2t64` added, and the updater run end to end. The editor itself is verified headlessly,
+under Xvfb with software rendering — not on real graphics hardware; see the limitations in the
+[README](README.md).
 
 ## cc-v1.16.3-1
 

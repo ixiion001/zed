@@ -88,9 +88,9 @@ CLI finds it there, connects over a WebSocket authenticated by a token from that
 JSON-RPC 2.0 / MCP. Zed's integrated terminal exports `CLAUDE_CODE_SSE_PORT` and
 `ENABLE_IDE_INTEGRATION`, which is what makes the connection automatic.
 
-The patch is small on purpose: one new crate, `crates/claude_code_ide/`, plus a 43-line graft into
-existing Zed code. Keeping it that small is why rebasing onto a new Zed release costs about ten
-lines. See [`crates/claude_code_ide/README.md`](../crates/claude_code_ide/README.md).
+The patch is small on purpose: one new crate, `crates/claude_code_ide/`, plus an 85-line graft into
+existing Zed code. Keeping it that small is what makes tracking upstream cheap — moving from Zed
+1.16.3 to 1.17.2, across 118 upstream commits, took a one-line fix. See [`crates/claude_code_ide/README.md`](../crates/claude_code_ide/README.md).
 
 `script/claude-ide-probe.py` checks a running editor end to end — lock file, handshake, MCP,
 `tools/call` — and exits non-zero if anything regressed.

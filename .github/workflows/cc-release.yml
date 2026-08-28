@@ -331,6 +331,10 @@ jobs:
           Run the unmodified `claude` CLI in Zed's integrated terminal and it connects
           on its own — diagnostics, open-file and Keep/Reject diffs appear in the editor.
 
+          Everything that differs from official Zed, and nothing else:
+          [v@UPSTREAM@ ... this build](https://github.com/zed-industries/zed/compare/v@UPSTREAM@...ixiion001:@TAG@).
+          One new crate, plus an 85-line graft into existing Zed code.
+
           ### Install — Windows
 
           Unzip into `%LOCALAPPDATA%\Programs\ZedDev` and run `zed.exe` from there.
@@ -404,7 +408,7 @@ jobs:
           GPL-3; corresponding source is this repository.
           NOTES
 
-          sed -i "s|@UPSTREAM@|$upstream|g; s|@COMMIT@|$GITHUB_SHA|g" notes.md
+          sed -i "s|@UPSTREAM@|$upstream|g; s|@COMMIT@|$GITHUB_SHA|g; s|@TAG@|$TAG|g" notes.md
 
           # `create` fails if the release already exists, e.g. on a re-run; fall
           # back to replacing its assets rather than failing the job.

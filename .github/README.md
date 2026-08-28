@@ -93,7 +93,25 @@ JSON-RPC 2.0 / MCP. Zed's integrated terminal exports `CLAUDE_CODE_SSE_PORT` and
 
 The patch is small on purpose: one new crate, `crates/claude_code_ide/`, plus an 85-line graft into
 existing Zed code. Keeping it that small is what makes tracking upstream cheap — moving from Zed
-1.16.3 to 1.17.2, across 118 upstream commits, took a one-line fix. See [`crates/claude_code_ide/README.md`](../crates/claude_code_ide/README.md).
+1.16.3 to 1.17.2, across 118 upstream commits, took a one-line fix. See
+[`crates/claude_code_ide/README.md`](../crates/claude_code_ide/README.md).
+
+You do not have to take that on trust. This compares official Zed against this fork — every
+line of the difference, nothing else:
+
+[`zed-industries/zed@v1.17.2 ... ixiion001:main-patched`](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched)
+
+The graft is the part that matters, and it is reproducible from a clone. The fork does not carry
+upstream's tags, so name the base tag once — the commits themselves are already there, because this
+branch is rebased directly onto it:
+
+```sh
+git remote add zed https://github.com/zed-industries/zed
+git fetch zed tag v1.17.2
+git diff --shortstat v1.17.2..main-patched -- \
+  crates/project/ crates/zed/src/main.rs crates/zed/Cargo.toml Cargo.toml
+#   5 files changed, 85 insertions(+)
+```
 
 `script/claude-ide-probe.py` checks a running editor end to end — lock file, handshake, MCP,
 `tools/call` — and exits non-zero if anything regressed.

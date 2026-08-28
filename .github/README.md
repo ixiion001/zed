@@ -23,7 +23,8 @@ and JetBrains extensions speak.
 
 ## Install
 
-Download from [Releases](../../releases). Every release ships a `.sha256` beside each asset; verify
+Download from [Releases](../../releases) — the [changelog](CHANGELOG.md) says what each one is
+built on and what has been verified. Every release ships a `.sha256` beside each asset; verify
 with `sha256sum -c <asset>.sha256` (`shasum -a 256 -c` on macOS). The binaries are **unsigned** — the
 source is this repository at the commit named in the release, and can be rebuilt from it.
 
@@ -71,9 +72,13 @@ instead of failing.
   offers, not a shortcoming of this build.
 - **Unsigned binaries**, so Gatekeeper and SmartScreen will object the first time.
 - **No auto-update**, by design — see above.
-- **Tracks Zed stable, roughly one release behind.**
-- **Linux has not been run on real graphics hardware yet.** It is verified headlessly under Xvfb
-  with software rendering; feedback from an actual desktop is welcome.
+- **Tracks Zed stable, one or two releases behind.** A weekly job rebases onto each new upstream
+  stable; see the [changelog](CHANGELOG.md) for what a given release is built on.
+- **The Linux build has never been launched on a desktop.** The artifact is verified — the binary
+  runs, reports the right channel and commit, and its only unbundled dependency is `libasound2t64`
+  — and the updater is tested end to end. But no one has yet started the editor on real graphics
+  hardware, so the GUI and the integration are unproven there. Reports from an actual desktop are
+  the most useful thing anyone could send.
 - Best-effort support. [Issues](../../issues) are open.
 
 ## How it works

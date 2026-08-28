@@ -132,6 +132,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Without this the rebase dies at commit 9 of the series, every run:
+          #
+          #   error: unable to create symlink CLAUDE.md: File name too long
+          #
+          # Upstream ships CLAUDE.md as a symlink to .rules. The commit that
+          # introduces this fork's replacement still carries mode 120000, and a
+          # later commit corrects it to 100644 -- so replaying the first one asks
+          # the filesystem for a symlink whose target is the whole document, and
+          # ENAMETOOLONG stops the rebase. Invisible on Windows, which is where
+          # the bad mode was committed and why it survived; fatal on the runner.
+          #
+          # core.symlinks=false makes git write symlinks out as ordinary files
+          # containing their target. It changes only the worktree: the 262
+          # symlinks in this tree keep mode 120000 in every commit, verified
+          # against a local replay of this exact rebase. None of them is a build
+          # input -- they are LICENSE files, AGENTS.md and GEMINI.md -- so cargo
+          # is unaffected, and the worktree is discarded when the job ends.
+          git config core.symlinks false
+
           git checkout -b "auto/$NEW"
 
           # --onto replays only our commits: everything after the old upstream
@@ -143,6 +162,12 @@ jobs:
           fi
 
           conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
+          # A rebase can stop without any unmerged path -- a checkout that the
+          # filesystem refuses, for one. Saying "conflicts" and then listing
+          # nothing sends the reader looking for a merge that never happened.
+          if [ -z "$conflicts" ]; then
+            conflicts="_No conflicting files. The rebase stopped for some other reason; read the run log._"
+          fi
           git rebase --abort
 
           title="auto-rebase: $NEW conflicts with the patch series"

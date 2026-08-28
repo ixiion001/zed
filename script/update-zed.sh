@@ -302,6 +302,16 @@ new=$(find "$staging" -maxdepth 1 -name '*.app' -print -quit)
 
 mkdir -p "$INSTALL_DIR"
 if [ -e "$APP" ]; then
+    # Clear any same-named leftover first. The sweep near the top of this script
+    # normally has, but it is deliberately quiet about failure, and if one did
+    # survive then `mv` puts the bundle *inside* it rather than beside it -- an
+    # install that looks like it worked and will not launch. Two installs in a
+    # row with no detectable commit are enough to reach that, since both stamp
+    # as "unknown". `mv -T` says this in one word but is GNU-only; BSD mv on
+    # macOS, the platform where this bites, does not have it. No `|| true` here:
+    # if the leftover cannot be removed the sweep's silence is exactly what we
+    # are guarding against, so let set -e stop before the rename.
+    rm -rf "$APP.old-$stamp"
     mv "$APP" "$APP.old-$stamp"
 fi
 mv "$new" "$APP"

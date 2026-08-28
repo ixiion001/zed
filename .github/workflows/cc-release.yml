@@ -46,7 +46,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event.inputs.platforms || '["windows-latest","ubuntu-24.04","macos-latest"]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Must precede any cargo invocation, including the cache action's
       # `cargo metadata`.
@@ -127,7 +127,7 @@ jobs:
 
       # bundle-mac shells out to `npm install --global dmg-license` for the
       # DMG's license agreement.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: runner.os == 'macOS'
         with:
           node-version: '24'
@@ -230,7 +230,7 @@ jobs:
           sha256sum "$name" > "$name.sha256"
           echo "built $name ($(du -h "$name" | cut -f1))" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: zed-claude-code-${{ matrix.os }}
           path: |
@@ -256,7 +256,7 @@ jobs:
       contents: write
       actions: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

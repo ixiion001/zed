@@ -127,6 +127,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ steps.target.outputs.base }}
           NEW: ${{ steps.target.outputs.new }}
+          CC_RELEASE_PAT: ${{ secrets.CC_RELEASE_PAT }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -304,31 +305,67 @@ jobs:
           # The main line is never force-pushed.
           git push --force origin "auto/$NEW"
 
-          title="auto-rebase: $NEW is ready to release"
-          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
-            echo "issue already open" && exit 0
+          # One open issue per target version. This also keeps a re-run, or next
+          # week's cron firing before last week's branch was adopted, from
+          # tagging and building the same rebase twice.
+          if [ -n "$(gh issue list --state open --search "in:title \"$NEW\"" --json number --jq '.[0].number // empty')" ]; then
+            echo "an open issue already covers $NEW" && exit 0
           fi
 
-          cat > issue.md <<BODY
+          # Suffix rule: n = 1 + how many cc-<version>-* tags exist, counted on
+          # the remote rather than in this clone, so a retry can never reuse a
+          # number that already has a release attached to it.
+          n=$(( $(git ls-remote --tags origin "refs/tags/cc-$NEW-*" | grep -c . || true) + 1 ))
+          tag="cc-$NEW-$n"
+
+          if [ -n "${CC_RELEASE_PAT:-}" ]; then
+            # A tag pushed with GITHUB_TOKEN starts nothing -- GitHub suppresses
+            # workflow triggers from that token to prevent loops -- so the tag
+            # goes up with the fine-grained PAT instead. Actions masks the
+            # secret in logs.
+            git tag -a "$tag" -m "Zed ${NEW#v} + Claude Code IDE"
+            git push "https://x-access-token:${CC_RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag"
+
+            title="auto-rebase: $tag is building"
+            cat > issue.md <<BODY
+          \`auto/$NEW\` -- this fork's series rebased from \`$BASE\` onto
+          upstream \`$NEW\` -- compiles, passes its tests, and has been tagged
+          \`$tag\`. [cc-release](../../actions/workflows/cc-release.yml) is
+          building it now. If every platform leg and its channel guard is green,
+          the release **promotes itself to \`/releases/latest\`** and every
+          machine picks it up on its next updater run; if anything is red,
+          nothing is published at all.
+
+          What stays manual is adopting the branch, once the release is out:
+          BODY
+          else
+            title="auto-rebase: $NEW is ready to release"
+            cat > issue.md <<BODY
           \`auto/$NEW\` carries this fork's patch series rebased from \`$BASE\`
           onto upstream \`$NEW\`. It compiles and its tests pass.
 
-          Nothing has been built or published. To cut the prerelease:
+          Nothing has been built: the \`CC_RELEASE_PAT\` secret is not set (or
+          has expired), and a tag pushed with \`GITHUB_TOKEN\` starts no
+          workflow. Either restore the secret and re-run this job, or tag by
+          hand:
 
           \`\`\`
           git fetch fork
           git checkout auto/$NEW
-          git tag -a cc-$NEW-1 -m "Zed ${NEW#v} + Claude Code IDE"
-          git push fork cc-$NEW-1
+          git tag -a $tag -m "Zed ${NEW#v} + Claude Code IDE"
+          git push fork $tag
           \`\`\`
 
-          That starts [cc-release](../../actions/workflows/cc-release.yml), which
-          builds all three platforms and publishes a **prerelease** -- invisible
-          to \`/releases/latest\`, so no machine updates itself to it. Once you
-          have run it:
+          That starts [cc-release](../../actions/workflows/cc-release.yml),
+          which builds all three platforms and, when every leg's channel guard
+          passes, publishes and promotes the release itself. Then adopt the
+          branch:
+          BODY
+          fi
+
+          cat >> issue.md <<BODY
 
           \`\`\`
-          gh release edit cc-$NEW-1 --prerelease=false --latest
           git checkout main-patched && git reset --hard auto/$NEW
           git push --force-with-lease fork main-patched
           \`\`\`
@@ -346,10 +383,6 @@ jobs:
 
           (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
           the others. Use whichever points at ixiion001/zed.)
-
-          Tagging is manual because a tag pushed by this job would not start
-          cc-release: GitHub does not let a run started by \`GITHUB_TOKEN\`
-          trigger another run.
           BODY
           # Created without --label, then labelled separately. `gh issue create`
           # resolves label names through GraphQL, which can lag the REST write

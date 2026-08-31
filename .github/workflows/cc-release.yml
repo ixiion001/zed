@@ -421,8 +421,11 @@ jobs:
 
           ### Why prerelease
 
-          Marked prerelease on purpose. `/releases/latest` skips prereleases, so nothing
-          updates itself to this build until it is promoted by hand.
+          Published as a prerelease, then promoted to `/releases/latest` in the same
+          run -- promotion only happens after every platform's build and channel
+          guard has passed. Updaters follow `/releases/latest`, so a demoted
+          release (`gh release edit <tag> --prerelease=true`) disappears from
+          their view on their next run.
 
           ### Credits
 
@@ -439,3 +442,11 @@ jobs:
             --title "Zed $upstream + Claude Code IDE (unofficial)" \
             --notes-file notes.md dist/* \
             || gh release upload "$TAG" dist/* --clobber
+
+          # Self-promotion. This job runs only when every platform leg -- and
+          # so every channel guard -- is green, which means a bad week degrades
+          # to "no release", never to "a broken release promoted itself".
+          # Rollback, should a promoted build misbehave:
+          #   gh release edit <tag> --prerelease=true
+          #   gh release edit <previous tag> --latest
+          gh release edit "$TAG" --prerelease=false --latest

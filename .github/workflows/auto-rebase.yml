@@ -30,9 +30,14 @@ name: auto-rebase
 
 on:
   schedule:
-    # Mondays 06:00 UTC. Zed's releases land midweek, so this picks up the
-    # previous week's release after a few days of other people finding its bugs.
-    - cron: "0 6 * * 1"
+    # Tuesdays 05:37 UTC. Zed's releases land midweek, so early in the week
+    # still picks up the previous release after a few days of other people
+    # finding its bugs. The odd slot is deliberate: GitHub's cron scheduler is
+    # most congested at minute 0 of a round hour on Monday mornings, when
+    # everyone's weekly job fires -- delayed runs are common there and a
+    # dropped slot is possible. A missed slot is never backfilled; it simply
+    # waits a week, which costs nothing here but is worth avoiding for free.
+    - cron: "37 5 * * 2"
   workflow_dispatch:
     inputs:
       target_tag:

@@ -6,17 +6,20 @@
 # any API break during a two-hour build. This does the noticing and the
 # discovering, and stops the moment anything looks wrong.
 #
-# It cannot ship anything on its own. Every path ends either at a branch plus an
-# issue asking for a decision, or at an issue explaining why it stopped. The main
-# line is never touched: work happens on `auto/v<tag>`, which is disposable and
-# force-pushed freely.
+# When the rebase, the crate check and the tests all pass, it tags the result,
+# which starts cc-release.yml: three platform builds, each guarding that its
+# artifact is a dev-channel build of the tagged commit, and a release that
+# promotes itself only when all three are green. The main line is never touched:
+# work happens on `auto/v<tag>`, which is disposable and force-pushed freely,
+# and adopting it onto `main-patched` stays a human act -- the issue this job
+# opens carries the recipe.
 #
-# Why it stops short of publishing: a tag pushed with GITHUB_TOKEN does not start
-# another workflow run -- GitHub suppresses that so workflows cannot trigger each
-# other in a loop. This job therefore cannot fire cc-release.yml by tagging, and
-# the last step is a command for a human to run. Closing that gap means giving
-# cc-release.yml a `workflow_call:` trigger and calling it from here, which is
-# worth doing once this has proven itself.
+# The tag is pushed with the CC_RELEASE_PAT secret (fine-grained, contents:write
+# on this repository only, **expires 2027-08-30** -- expect the fallback below
+# around then). A tag pushed with GITHUB_TOKEN starts no workflow run: GitHub
+# suppresses that so workflows cannot trigger each other in a loop. With the
+# secret absent or expired, every path ends at an issue with the manual tag
+# recipe instead, and nothing is built or shipped.
 #
 # Note on the heredocs below: their terminators sit at the *base* indentation of
 # the `run:` block, not the indentation of the surrounding `if`. YAML strips the

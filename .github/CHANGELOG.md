@@ -5,6 +5,36 @@ build of the fork against Zed 1.16.3. Every release is published as a prerelease
 `/releases/latest` excludes prereleases, so nothing updates itself to a build that has not been
 promoted.
 
+## cc-v1.17.2-1 — published 2026-08-28, promoted 2026-08-31
+
+Zed **1.17.2** plus `crates/claude_code_ide`, built from `d27e2bc1cf`.
+
+### Changed
+
+- Rebased from Zed 1.16.3 to 1.17.2, across 118 upstream commits. Cost: one
+  conflict line — upstream's `chrono` landing beside `claude_code_ide` in
+  `crates/zed/Cargo.toml`.
+
+### Added
+
+- The source delta ships with the release: `zed-claude-code-cc-v1.17.2-1.diff.gz`
+  is everything this build changes in upstream Zed and nothing else. `gunzip` it
+  and `git apply` it to a checkout of upstream `v1.17.2` to rebuild from source.
+
+### Verified
+
+| | build | channel guard | install | integration |
+|---|---|---|---|---|
+| macOS | 2 h 10 m | `dev.zed.Zed-Dev` | `update-zed.sh --pre` | **31/31** protocol checks against the shipped build |
+| Linux | 1 h 02 m | binary executed in CI: `Zed dev 1.17.2 d27e2bc1cf…` | — | — |
+| Windows | 1 h 48 m | `1.17.2+dev.5.d27e2bc1cf…` | pending | pending |
+
+Every leg's guard now proves the artifact itself is a dev-channel build of the
+tagged commit before anything publishes — a stable-channel build would let Zed's
+own updater silently replace the patch, and can no longer ship. Promotion was by
+hand this time, gated on the macOS install and probe; from the next release it
+happens in CI once all three guards pass.
+
 ## cc-v1.16.3-2 — 2026-08-28
 
 Zed 1.16.3 plus `crates/claude_code_ide`, built from `95c83f3ada`.

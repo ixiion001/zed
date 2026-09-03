@@ -9,7 +9,10 @@ use editor::Editor;
 use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 use text::Point;
 use workspace::{OpenOptions, Workspace};
 
@@ -298,51 +301,60 @@ impl WorkspaceDispatcher {
 /// `@file#Lstart-end`, which the CLI reads once.
 const SELECTION_TEXT_LIMIT: usize = 32 * 1024;
 
-/// The editor's newest selection as the protocol describes one: the selected
-/// text, the file's native path, and 0-based positions. This is both the
-/// `getCurrentSelection` reply and the `selection_changed` notification.
-pub fn selection_payload(editor: &Entity<Editor>, cx: &mut App) -> Value {
+/// The editor's file (empty for an untitled buffer) and its newest selection:
+/// the raw material of both the selection payload and an `@` mention.
+pub fn selection_range(editor: &Entity<Editor>, cx: &mut App) -> (String, Range<Point>) {
     editor.update(cx, |editor, cx| {
         let display_snapshot = editor.display_snapshot(cx);
         let cursor = editor.selections.newest::<Point>(&display_snapshot);
-
         let path = editor
             .buffer()
             .read(cx)
             .as_singleton()
             .and_then(|buffer| local_abs_path(buffer.read(cx), cx))
             .unwrap_or_default();
+        (path, cursor.range())
+    })
+}
 
-        let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
-        let mut text: String =
-            buffer_snapshot.text_for_range(cursor.start..cursor.end).collect();
+/// The editor's newest selection as the protocol describes one: the selected
+/// text, the file's native path, and 0-based positions. This is both the
+/// `getCurrentSelection` reply and the `selection_changed` notification.
+pub fn selection_payload(editor: &Entity<Editor>, cx: &mut App) -> Value {
+    let (path, range) = selection_range(editor, cx);
+    let snapshot = editor.read(cx).buffer().read(cx).snapshot(cx);
+
+    // Chunk by chunk, so a select-all in a huge file copies no more than the
+    // cap on each cursor move rather than the whole buffer.
+    let mut text = String::new();
+    for chunk in snapshot.text_for_range(range.clone()) {
+        text.push_str(chunk);
         if text.len() > SELECTION_TEXT_LIMIT {
-            let mut cut = SELECTION_TEXT_LIMIT;
-            while !text.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            text.truncate(cut);
-            text.push_str("\n[selection cut short by Zed at 32 KiB; mention the file and line range to read all of it]");
+            text.truncate(text.floor_char_boundary(SELECTION_TEXT_LIMIT));
+            text.push_str(
+                "\n[selection cut short by Zed; mention the file and line range to read all of it]",
+            );
+            break;
         }
+    }
 
-        // `character` is a UTF-16 offset, as VS Code defines it and the CLI
-        // expects, but `Point::column` counts UTF-8 bytes. They agree only on
-        // ASCII lines; an accent, a CJK character or an emoji earlier in the
-        // line shifts every column after it and the CLI resolves the selection
-        // to the wrong span.
-        let start = buffer_snapshot.point_to_point_utf16(cursor.start);
-        let end = buffer_snapshot.point_to_point_utf16(cursor.end);
+    // `character` is a UTF-16 offset, as VS Code defines it and the CLI
+    // expects, but `Point::column` counts UTF-8 bytes. They agree only on
+    // ASCII lines; an accent, a CJK character or an emoji earlier in the
+    // line shifts every column after it and the CLI resolves the selection
+    // to the wrong span.
+    let start = snapshot.point_to_point_utf16(range.start);
+    let end = snapshot.point_to_point_utf16(range.end);
 
-        json!({
-            "text": text,
-            "filePath": path,
-            "fileUrl": file_uri(&path),
-            "selection": {
-                "start": { "line": start.row, "character": start.column },
-                "end": { "line": end.row, "character": end.column },
-                "isEmpty": cursor.start == cursor.end,
-            }
-        })
+    json!({
+        "text": text,
+        "filePath": path,
+        "fileUrl": file_uri(&path),
+        "selection": {
+            "start": { "line": start.row, "character": start.column },
+            "end": { "line": end.row, "character": end.column },
+            "isEmpty": range.start == range.end,
+        }
     })
 }
 

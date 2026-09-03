@@ -18,7 +18,8 @@ as an ACP agent in the agent panel; this is the complementary direction, where
   to the model as context.
 - **`@`-mention shortcut.** `ctrl-alt-k` (`cmd-alt-k` on macOS) inserts the active editor's file
   and selected lines into the CLI prompt as `@src/file.py#L5-7`, like the VS Code extension. Bound
-  in the `Workspace` context, so it also works while you are typing in the terminal; the action is
+  in the `Workspace` context, so it also works while you are typing in the terminal dock (a terminal
+  opened as a centre tab is itself the active item, and the shortcut says so). The action is
   `claude_code_ide::MentionSelection` if you want another key.
 - Model-visible **diagnostics** (`getDiagnostics`), including the CLI's own
   post-edit check that feeds new errors back to the model.

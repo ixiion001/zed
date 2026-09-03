@@ -33,6 +33,15 @@ Fifteen findings from a code review of the patch, several verified against the C
 - Connections end with their window instead of answering "entity released" to a CLI that still
   believed it was connected; a transient accept failure no longer tears the server down.
 
+### Added
+
+- `ctrl-alt-k` (`cmd-alt-k` on macOS) inserts the active editor's file and selected lines into
+  the CLI prompt as `@src/file.py#L5-7`, the VS Code extension's shortcut, and moves focus to the
+  terminal dock so Enter submits it. Works from the terminal too: the mention comes from the
+  active centre editor, not from the focused element. Action `claude_code_ide::MentionSelection`.
+- The selected text in a selection push is cut at 32 KiB, with the cut marked, so a select-all
+  does not spend the model's context on every prompt; the CLI re-sends the selection each time.
+
 ### Changed
 
 - The graft into existing Zed code is 43 lines, down from 85: the terminal port injection lives

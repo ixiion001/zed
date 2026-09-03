@@ -140,27 +140,6 @@ impl Project {
         cx.spawn(async move |project, cx| {
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
-            // Local terminals only. The server binds this machine's loopback, so
-            // 127.0.0.1:<port> evaluated inside an SSH session names the *remote*
-            // host, where nothing is listening -- the CLI would try to connect
-            // and fail rather than simply run without the integration.
-            let ide_port = if remote_client.is_none() {
-                project
-                    .read_with(cx, |project, _| project.claude_code_ide_port())
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-            if let Some(port) = ide_port {
-                // `entry` rather than `insert`: the user's terminal env settings
-                // were applied by the `extend` above, and overwriting them here
-                // would ignore a deliberate setting without saying so.
-                env.entry("CLAUDE_CODE_SSE_PORT".to_owned())
-                    .or_insert_with(|| port.to_string());
-                env.entry("ENABLE_IDE_INTEGRATION".to_owned())
-                    .or_insert_with(|| "true".to_owned());
-            }
 
             let activation_script = maybe!(async {
                 for toolchain in toolchains {
@@ -404,27 +383,6 @@ impl Project {
             let shell_kind = ShellKind::new(&shell, path_style.is_windows());
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
-            // Local terminals only. The server binds this machine's loopback, so
-            // 127.0.0.1:<port> evaluated inside an SSH session names the *remote*
-            // host, where nothing is listening -- the CLI would try to connect
-            // and fail rather than simply run without the integration.
-            let ide_port = if remote_client.is_none() {
-                project
-                    .read_with(cx, |project, _| project.claude_code_ide_port())
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-            if let Some(port) = ide_port {
-                // `entry` rather than `insert`: the user's terminal env settings
-                // were applied by the `extend` above, and overwriting them here
-                // would ignore a deliberate setting without saying so.
-                env.entry("CLAUDE_CODE_SSE_PORT".to_owned())
-                    .or_insert_with(|| port.to_string());
-                env.entry("ENABLE_IDE_INTEGRATION".to_owned())
-                    .or_insert_with(|| "true".to_owned());
-            }
 
             let activation_script = maybe!(async {
                 for toolchain in toolchains {
@@ -591,27 +549,6 @@ impl Project {
         cx.spawn(async move |project, cx| {
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
-            // Local terminals only. The server binds this machine's loopback, so
-            // 127.0.0.1:<port> evaluated inside an SSH session names the *remote*
-            // host, where nothing is listening -- the CLI would try to connect
-            // and fail rather than simply run without the integration.
-            let ide_port = if remote_client.is_none() {
-                project
-                    .read_with(cx, |project, _| project.claude_code_ide_port())
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-            if let Some(port) = ide_port {
-                // `entry` rather than `insert`: the user's terminal env settings
-                // were applied by the `extend` above, and overwriting them here
-                // would ignore a deliberate setting without saying so.
-                env.entry("CLAUDE_CODE_SSE_PORT".to_owned())
-                    .or_insert_with(|| port.to_string());
-                env.entry("ENABLE_IDE_INTEGRATION".to_owned())
-                    .or_insert_with(|| "true".to_owned());
-            }
 
             project.update(cx, move |_, cx| {
                 match remote_client {
@@ -658,7 +595,7 @@ impl Project {
         remote_client: Option<Entity<RemoteClient>>,
         cx: &mut App,
     ) -> Shared<Task<Option<HashMap<String, String>>>> {
-        if let Some(path) = &path {
+        let environment = if let Some(path) = &path {
             let shell = Shell::Program(shell.to_string());
             self.environment
                 .update(cx, |project_env, cx| match &remote_client {
@@ -672,6 +609,26 @@ impl Project {
                 })
         } else {
             Task::ready(None).shared()
+        };
+        // Local terminals only: the Claude Code IDE server binds this machine's
+        // loopback, so 127.0.0.1:<port> evaluated inside an SSH session names
+        // the *remote* host, where nothing is listening -- the CLI would try to
+        // connect and fail rather than simply run without the integration.
+        // `insert`, because the captured environment may already carry a
+        // CLAUDE_CODE_SSE_PORT inherited from the shell Zed was started in (a
+        // Claude terminal in another window, say), and that port belongs to a
+        // different window. Every caller applies the user's `terminal.env`
+        // settings on top afterwards, so a deliberate override still wins.
+        match self.claude_code_ide_port {
+            Some(port) if remote_client.is_none() => cx
+                .spawn(async move |_| {
+                    let mut env = environment.await.unwrap_or_default();
+                    env.insert("CLAUDE_CODE_SSE_PORT".to_owned(), port.to_string());
+                    env.insert("ENABLE_IDE_INTEGRATION".to_owned(), "true".to_owned());
+                    Some(env)
+                })
+                .shared(),
+            _ => environment,
         }
     }
 }

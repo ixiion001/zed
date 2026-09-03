@@ -5,6 +5,45 @@ build of the fork against Zed 1.16.3. Every release is published as a prerelease
 `/releases/latest` excludes prereleases, so nothing updates itself to a build that has not been
 promoted.
 
+## Unreleased — `main-patched` since cc-v1.17.2-1
+
+Fifteen findings from a code review of the patch, several verified against the CLI binary
+(2.1.258). Two of them mean earlier builds did less than they appeared to.
+
+### Fixed
+
+- `getDiagnostics` answers in the shape the CLI parses: one text block holding a JSON array of
+  `{uri, diagnostics: [{message, severity, range, source}]}`, 0-based, severity as a name, the
+  requested `uri` echoed verbatim. Before, the CLI's post-edit diagnostics check failed silently on
+  every buffer that had a diagnostic. Windows paths now compare case-insensitively, so a request
+  spelled `c:\proj\SRC` finds the buffer Zed knows as `C:\proj\src`.
+- Zed pushes `selection_changed` as the active editor's selection moves. That is the only way the
+  CLI learns the active file and selection: its footer ("In file.py", "N lines selected") and the
+  selection it hands the model both come from it. Before, nothing was ever pushed.
+- Every way out of a Keep/Reject diff settles the request: closing the tab, the toast's close
+  button, `close_tab` on Esc or exit, `closeAllDiffTabs`, or the CLI dying. Before, the tab and the
+  toast could outlive the request, and a later Keep answered with contents nobody could see.
+- The diff opens in the centre pane, titled as the CLI named it, without taking focus from the
+  terminal. Before, every proposal split the layout, because the pane heuristic never saw the dock
+  the terminal lives in.
+- A `CLAUDE_CODE_SSE_PORT` inherited from the shell Zed was started in no longer wins over the
+  window's own port.
+- SSH, WSL and collab windows no longer start a server or advertise remote paths in a local lock file.
+- The lock file follows Add/Remove Folder, so discovery by working directory stays accurate.
+- Connections end with their window instead of answering "entity released" to a CLI that still
+  believed it was connected; a transient accept failure no longer tears the server down.
+
+### Changed
+
+- The graft into existing Zed code is 43 lines, down from 85: the terminal port injection lives
+  once, in the function all three spawn paths call.
+
+### Verified
+
+Crate tests locally (17) and on Linux, macOS and Windows CI; the built Windows editor against
+`claude` 2.1.258/259: automated wire probe 19/19, then Keep, tab close, connection death, Add Folder,
+second window, footer and `<new-diagnostics>` by hand.
+
 ## cc-v1.17.2-1 — published 2026-08-28, promoted 2026-08-31
 
 Zed **1.17.2** plus `crates/claude_code_ide`, built from `d27e2bc1cf`.

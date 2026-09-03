@@ -16,6 +16,10 @@ as an ACP agent in the agent panel; this is the complementary direction, where
   around, which is the only way the CLI learns the active file and selection:
   its footer shows "N lines selected" / "In `<file>`", and the selection goes
   to the model as context.
+- **`@`-mention shortcut.** `ctrl-alt-k` (`cmd-alt-k` on macOS) inserts the active editor's file
+  and selected lines into the CLI prompt as `@src/file.py#L5-7`, like the VS Code extension. Bound
+  in the `Workspace` context, so it also works while you are typing in the terminal; the action is
+  `claude_code_ide::MentionSelection` if you want another key.
 - Model-visible **diagnostics** (`getDiagnostics`), including the CLI's own
   post-edit check that feeds new errors back to the model.
 - Open editors / open file / save / dirty checks

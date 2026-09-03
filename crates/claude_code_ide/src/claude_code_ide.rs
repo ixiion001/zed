@@ -28,6 +28,7 @@ use gpui::{
 };
 use project::Project;
 use serde_json::{Value, json};
+use terminal_view::terminal_panel::TerminalPanel;
 use util::ResultExt as _;
 use workspace::{Toast, Workspace, notifications::NotificationId};
 
@@ -72,17 +73,26 @@ pub fn init(cx: &mut App) {
             // Claude's terminal.
             workspace.register_action({
                 let server = server.downgrade();
-                move |workspace, _: &MentionSelection, _window, cx| {
+                move |workspace, _: &MentionSelection, window, cx| {
                     let outcome = match workspace.active_item_as::<Editor>(cx) {
                         Some(editor) => server
                             .update(cx, |server, cx| server.push_at_mention(&editor, cx))
                             .unwrap_or(Err("this window has no Claude Code server")),
                         None => Err("open a file in the centre pane to mention its selection"),
                     };
-                    // A shortcut that does nothing leaves the user guessing why.
-                    if let Err(reason) = outcome {
-                        let id = NotificationId::named("claude-code-ide-mention".into());
-                        workspace.show_toast(Toast::new(id, format!("Claude Code: {reason}")), cx);
+                    match outcome {
+                        // The mention now sits in the CLI's prompt, so Enter should
+                        // submit it there rather than overwrite the selection it
+                        // came from.
+                        Ok(()) => {
+                            workspace.focus_panel::<TerminalPanel>(window, cx);
+                        }
+                        // A shortcut that does nothing leaves the user guessing why.
+                        Err(reason) => {
+                            let id = NotificationId::named("claude-code-ide-mention".into());
+                            workspace
+                                .show_toast(Toast::new(id, format!("Claude Code: {reason}")), cx);
+                        }
                     }
                 }
             });

@@ -5,7 +5,7 @@
 
 use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
 use editor::{Editor, SplittableEditor};
-use gpui::{AnyWindowHandle, AsyncApp, Entity, WeakEntity};
+use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -48,14 +48,7 @@ impl WorkspaceDispatcher {
                         .buffer()
                         .read(cx)
                         .as_singleton()
-                        .and_then(|buffer| {
-                            buffer
-                                .read(cx)
-                                .file()
-                                .and_then(|file| file.as_local())
-                                .map(|file| file.abs_path(cx))
-                        })
-                        .map(|path| path.to_string_lossy().into_owned())
+                        .and_then(|buffer| local_abs_path(buffer.read(cx), cx))
                         .unwrap_or_default();
 
                     let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
@@ -118,12 +111,17 @@ impl WorkspaceDispatcher {
     }
 
     /// Finds the open buffer for an absolute path, if any.
+    ///
+    /// Scans the open buffers rather than resolving a project path: that covers
+    /// files `openFile` put into hidden worktrees, and it is the one place that
+    /// compares paths the way Windows does (see [`same_path`]).
     fn buffer_for_path(&self, path: &str, cx: &mut AsyncApp) -> Option<Entity<Buffer>> {
         self.workspace
             .update(cx, |workspace, cx| {
-                let project = workspace.project().read(cx);
-                let project_path = project.find_project_path(path, cx)?;
-                project.get_open_buffer(&project_path, cx)
+                let buffers = open_buffers(workspace, cx);
+                buffers.into_iter().find(|buffer| {
+                    local_abs_path(buffer.read(cx), cx).is_some_and(|open| same_path(&open, path))
+                })
             })
             .ok()
             .flatten()
@@ -141,10 +139,7 @@ impl WorkspaceDispatcher {
                         let editor = editor.read(cx);
                         let buffer = editor.buffer().read(cx).as_singleton()?;
                         let buffer = buffer.read(cx);
-                        let path = buffer
-                            .file()
-                            .and_then(|file| file.as_local())
-                            .map(|file| file.abs_path(cx).to_string_lossy().into_owned())?;
+                        let path = local_abs_path(buffer, cx)?;
                         let language = buffer
                             .language()
                             .map(|language| language.name().to_string())
@@ -173,59 +168,57 @@ impl WorkspaceDispatcher {
         Ok(mcp_text(json!({ "tabs": tabs })))
     }
 
+    /// Answers in the shape the CLI parses: one text block holding a JSON array
+    /// with one entry per file. The CLI reads only the first text block, expects
+    /// 0-based positions with UTF-16 columns (as VS Code defines them), and
+    /// drops any diagnostic whose severity is not one of the four names.
     fn get_diagnostics(&self, arguments: &Value, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
-        let target = arguments
-            .get("uri")
-            .and_then(Value::as_str)
-            .map(path_from_uri);
+        let requested_uri = arguments.get("uri").and_then(Value::as_str).map(str::to_owned);
+        let target = requested_uri.as_deref().map(path_from_uri);
 
-        let diagnostics = self
+        let files = self
             .workspace
             .update(cx, |workspace, cx| {
-                let buffers = workspace
-                    .project()
-                    .read(cx)
-                    .buffer_store()
-                    .read(cx)
-                    .buffers()
-                    .collect::<Vec<_>>();
-                let mut out = Vec::new();
-                for buffer in buffers {
+                let mut files = Vec::new();
+                for buffer in open_buffers(workspace, cx) {
                     let buffer = buffer.read(cx);
-                    let Some(path) = buffer
-                        .file()
-                        .and_then(|file| file.as_local())
-                        .map(|file| file.abs_path(cx).to_string_lossy().into_owned())
-                    else {
+                    let Some(path) = local_abs_path(buffer, cx) else {
                         continue;
                     };
-                    if target.as_ref().is_some_and(|target| target != &path) {
+                    if target.as_ref().is_some_and(|target| !same_path(target, &path)) {
                         continue;
                     }
                     let snapshot = buffer.snapshot();
-                    for entry in snapshot.diagnostics_in_range::<Point, Point>(
-                        Point::new(0, 0)..snapshot.max_point(),
-                        false,
-                    ) {
-                        out.push(json!({
-                            "filePath": path,
-                            "line": entry.range.start.row + 1,
-                            "character": entry.range.start.column + 1,
-                            "severity": severity_to_number(entry.diagnostic.severity),
-                            "message": entry.diagnostic.message.clone(),
-                            "source": entry.diagnostic.source.clone(),
-                        }));
-                    }
+                    let diagnostics = snapshot
+                        .diagnostics_in_range::<Point, Point>(
+                            Point::new(0, 0)..snapshot.max_point(),
+                            false,
+                        )
+                        .map(|entry| {
+                            let start = snapshot.point_to_point_utf16(entry.range.start);
+                            let end = snapshot.point_to_point_utf16(entry.range.end);
+                            json!({
+                                "message": entry.diagnostic.message,
+                                "severity": severity_name(entry.diagnostic.severity),
+                                "range": {
+                                    "start": { "line": start.row, "character": start.column },
+                                    "end": { "line": end.row, "character": end.column },
+                                },
+                                "source": entry.diagnostic.source,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    // The CLI compares this `uri` with the one it sent, without
+                    // percent-decoding either, so a request for one file gets its
+                    // own spelling back rather than our encoded form.
+                    let uri = requested_uri.clone().unwrap_or_else(|| file_uri(&path));
+                    files.push(json!({ "uri": uri, "diagnostics": diagnostics }));
                 }
-                out
+                files
             })
             .map_err(|error| ProtocolError::internal(error.to_string()))?;
 
-        let content = diagnostics
-            .into_iter()
-            .map(|diagnostic| json!({ "type": "text", "text": diagnostic.to_string() }))
-            .collect::<Vec<_>>();
-        Ok(json!({ "content": content }))
+        Ok(mcp_text(Value::Array(files)))
     }
 
     fn check_document_dirty(
@@ -304,24 +297,29 @@ impl WorkspaceDispatcher {
         let item = open_task.await.map_err(|error| ProtocolError::internal(error.to_string()))?;
 
         // Optionally select the requested line range (1-indexed in the protocol).
-        if let (Some(start), Some(end)) = (start_line, end_line) {
-            window
+        // Only an `Editor` can select; an image, say, opens as another item, and
+        // the reply must not claim a selection that never happened.
+        let selected = match (start_line, end_line) {
+            (Some(start), Some(end)) => window
                 .update(cx, |_root, window, cx| {
-                    if let Some(editor) = item.downcast::<Editor>() {
-                        editor.update(cx, |editor, cx| {
-                            let start = Point::new(start.saturating_sub(1) as u32, 0);
-                            let end = Point::new(end as u32, 0);
-                            editor.change_selections(Default::default(), window, cx, |selections| {
-                                selections.select_ranges([start..end]);
-                            });
+                    let Some(editor) = item.downcast::<Editor>() else {
+                        return false;
+                    };
+                    editor.update(cx, |editor, cx| {
+                        let start = Point::new(start.saturating_sub(1) as u32, 0);
+                        let end = Point::new(end as u32, 0);
+                        editor.change_selections(Default::default(), window, cx, |selections| {
+                            selections.select_ranges([start..end]);
                         });
-                    }
+                    });
+                    true
                 })
-                .ok();
-        }
+                .unwrap_or(false),
+            _ => false,
+        };
 
         let message = match (start_line, end_line) {
-            (Some(start), Some(end)) => {
+            (Some(start), Some(end)) if selected => {
                 format!("Opened file and selected lines {start} to {end}")
             }
             _ => format!("Opened file: {path}"),
@@ -465,19 +463,48 @@ fn required_path_field(arguments: &Value, field: &str) -> Result<String, Protoco
         .ok_or_else(|| ProtocolError::new(error_codes::INVALID_REQUEST, format!("missing {field}")))
 }
 
-/// Maps Zed/LSP diagnostic severities to the numeric scale the protocol uses
-/// (1 = error, 2 = warning, 3 = information, 4 = hint).
-fn severity_to_number(severity: DiagnosticSeverity) -> u8 {
+/// Maps Zed/LSP diagnostic severities to the names the CLI's validator accepts.
+fn severity_name(severity: DiagnosticSeverity) -> &'static str {
     match severity {
-        DiagnosticSeverity::ERROR => 1,
-        DiagnosticSeverity::WARNING => 2,
-        DiagnosticSeverity::INFORMATION => 3,
-        DiagnosticSeverity::HINT => 4,
-        // The scale has no zero. A language server reporting a severity outside
-        // 1-4 is out of spec, but answering with 0 puts *us* out of spec too and
-        // leaves the CLI to guess; 3 (information) is the neutral choice.
-        _ => 3,
+        DiagnosticSeverity::ERROR => "Error",
+        DiagnosticSeverity::WARNING => "Warning",
+        DiagnosticSeverity::INFORMATION => "Info",
+        DiagnosticSeverity::HINT => "Hint",
+        // A language server reporting a severity outside 1-4 is out of spec;
+        // the CLI drops anything it does not recognise, so answer with the
+        // neutral name rather than lose the diagnostic.
+        _ => "Info",
     }
+}
+
+/// Every buffer the project currently holds open, collected so the caller can
+/// read each one without holding the store borrowed.
+fn open_buffers(workspace: &Workspace, cx: &App) -> Vec<Entity<Buffer>> {
+    workspace.project().read(cx).buffer_store().read(cx).buffers().collect()
+}
+
+/// The absolute path of a buffer backed by a local file, as the protocol wants
+/// it: a plain native path. Remote and unsaved buffers have none.
+fn local_abs_path(buffer: &Buffer, cx: &App) -> Option<String> {
+    buffer
+        .file()
+        .and_then(|file| file.as_local())
+        .map(|file| file.abs_path(cx).to_string_lossy().into_owned())
+}
+
+/// Whether two absolute paths name the same file.
+///
+/// Windows paths compare case-insensitively and with either separator: the CLI
+/// passes on whatever spelling the shell had (`c:\proj\SRC` after a `cd` typed
+/// that way) while Zed reports the on-disk casing, and a bare path from the CLI
+/// never went through [`path_from_uri`]'s separator rewrite. Elsewhere the
+/// file system is case-sensitive and `\` is an ordinary character.
+fn same_path(a: &str, b: &str) -> bool {
+    let fold = |character: char| match character {
+        '\\' => '/',
+        other => other.to_ascii_lowercase(),
+    };
+    if cfg!(windows) { a.chars().map(fold).eq(b.chars().map(fold)) } else { a == b }
 }
 
 impl Dispatcher for WorkspaceDispatcher {
@@ -713,6 +740,22 @@ mod tests {
         // A bare name, and a root with no component, both fall back to the input.
         assert_eq!(file_name("project"), "project");
         assert_eq!(file_name("/"), "/");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_path_folds_case_and_separators_on_windows() {
+        assert!(same_path(r"c:\dev\proj\SRC\main.rs", r"C:\dev\proj\src\main.rs"));
+        assert!(same_path("C:/dev/proj/src/main.rs", r"C:\dev\proj\src\main.rs"));
+        assert!(!same_path(r"C:\dev\proj\src\main.rs", r"C:\dev\proj\src\main.rss"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn same_path_is_exact_off_windows() {
+        assert!(same_path("/home/user/Main.rs", "/home/user/Main.rs"));
+        assert!(!same_path("/home/user/Main.rs", "/home/user/main.rs"));
+        assert!(!same_path(r"/home/user/we\ird.txt", "/home/user/we/ird.txt"));
     }
 
     #[test]

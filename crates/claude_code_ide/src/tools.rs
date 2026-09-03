@@ -3,14 +3,15 @@
 //! the active workspace, editor, and buffers and shaping the result into the
 //! JSON the Claude Code CLI expects (mirroring the official extensions).
 
+use crate::open_diff::{PendingDiffs, open_diff};
 use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
-use editor::{Editor, SplittableEditor};
+use editor::Editor;
 use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use text::Point;
-use workspace::{OpenOptions, SaveIntent, Workspace};
+use workspace::{OpenOptions, Workspace};
 
 /// Satisfies tool calls against a single Zed workspace.
 ///
@@ -21,6 +22,8 @@ pub struct WorkspaceDispatcher {
     workspace: WeakEntity<Workspace>,
     window: Option<AnyWindowHandle>,
     cx: AsyncApp,
+    /// The `openDiff` requests this connection is waiting on; see [`PendingDiffs`].
+    pending: PendingDiffs,
 }
 
 impl WorkspaceDispatcher {
@@ -29,7 +32,7 @@ impl WorkspaceDispatcher {
         window: Option<AnyWindowHandle>,
         cx: AsyncApp,
     ) -> Self {
-        Self { workspace, window, cx }
+        Self { workspace, window, cx, pending: PendingDiffs::default() }
     }
 
     fn get_current_selection(&self, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
@@ -226,7 +229,7 @@ impl WorkspaceDispatcher {
         arguments: &Value,
         cx: &mut AsyncApp,
     ) -> Result<Value, ProtocolError> {
-        let path = required_path_field(arguments, "filePath")?;
+        let path = required_string_field(arguments, "filePath")?;
         match self.buffer_for_path(&path, cx) {
             Some(buffer) => {
                 let is_dirty = buffer.update(cx, |buffer, _| buffer.is_dirty());
@@ -243,38 +246,8 @@ impl WorkspaceDispatcher {
         }
     }
 
-    /// Closes all open diff tabs (our `openDiff` views), returning the count.
-    fn close_diff_tabs(&self, cx: &mut AsyncApp) -> usize {
-        let Some(window) = self.window else {
-            return 0;
-        };
-        window
-            .update(cx, |_root, window, cx| {
-                let Some(workspace) = self.workspace.upgrade() else {
-                    return 0;
-                };
-                workspace.update(cx, |workspace, cx| {
-                    let ids = workspace
-                        .items_of_type::<SplittableEditor>(cx)
-                        .map(|editor| editor.entity_id())
-                        .collect::<Vec<_>>();
-                    let count = ids.len();
-                    for pane in workspace.panes().to_vec() {
-                        for id in &ids {
-                            pane.update(cx, |pane, cx| {
-                                pane.close_item_by_id(*id, SaveIntent::Skip, window, cx)
-                            })
-                            .detach();
-                        }
-                    }
-                    count
-                })
-            })
-            .unwrap_or(0)
-    }
-
     async fn open_file(&self, arguments: Value, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
-        let path = required_path_field(&arguments, "filePath")?;
+        let path = required_string_field(&arguments, "filePath")?;
         let start_line = arguments.get("startLine").and_then(Value::as_u64);
         let end_line = arguments.get("endLine").and_then(Value::as_u64);
         let window =
@@ -332,7 +305,7 @@ impl WorkspaceDispatcher {
         arguments: Value,
         cx: &mut AsyncApp,
     ) -> Result<Value, ProtocolError> {
-        let path = required_path_field(&arguments, "filePath")?;
+        let path = required_string_field(&arguments, "filePath")?;
         let Some(buffer) = self.buffer_for_path(&path, cx) else {
             return Ok(mcp_text(
                 json!({ "success": false, "message": format!("Document not open: {path}") }),
@@ -455,7 +428,7 @@ fn file_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-fn required_path_field(arguments: &Value, field: &str) -> Result<String, ProtocolError> {
+fn required_string_field(arguments: &Value, field: &str) -> Result<String, ProtocolError> {
     arguments
         .get(field)
         .and_then(Value::as_str)
@@ -625,16 +598,20 @@ impl Dispatcher for WorkspaceDispatcher {
             "checkDocumentDirty" => self.check_document_dirty(&arguments, &mut cx),
             "openFile" => self.open_file(arguments, &mut cx).await,
             "saveDocument" => self.save_document(arguments, &mut cx).await,
+            // The CLI sends `close_tab` when the user aborts (Esc) and on exit,
+            // having already discarded that request's answer. Removing the entry
+            // rejects it (see `PendingDiffs`), which closes its tab and toast.
             "close_tab" => {
-                let closed = self.close_diff_tabs(&mut cx);
-                Ok(mcp_text(json!({ "success": true, "closed": closed })))
+                let tab_name = required_string_field(&arguments, "tab_name")?;
+                self.pending.borrow_mut().remove(&tab_name);
+                Ok(mcp_text(json!({ "success": true })))
             }
             "closeAllDiffTabs" => {
-                let closed = self.close_diff_tabs(&mut cx);
+                let closed = self.pending.borrow_mut().drain().count();
                 Ok(mcp_text(json!({ "closedCount": closed })))
             }
             "openDiff" => {
-                crate::open_diff::open_diff(self.workspace.clone(), self.window, arguments, &mut cx)
+                open_diff(self.workspace.clone(), self.window, &self.pending, arguments, &mut cx)
                     .await
             }
             other => Err(ProtocolError::method_not_found(other)),

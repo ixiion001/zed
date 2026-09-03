@@ -5,7 +5,7 @@ Run the real `claude` CLI in Zed's integrated terminal and it connects on its ow
 diagnostics and Keep/Reject diffs appear in the editor.
 Prebuilt for Windows, macOS and Linux.
 Zed's own code is barely touched: the integration is a self-contained crate plus an
-**85-line graft**, which is what lets this build follow upstream Zed rather than drift away
+**43-line graft**, which is what lets this build follow upstream Zed rather than drift away
 from it.
 
 > Not affiliated with, endorsed by, or supported by Zed Industries. This is a personal fork.
@@ -91,7 +91,7 @@ CLI finds it there, connects over a WebSocket authenticated by a token from that
 JSON-RPC 2.0 / MCP. Zed's integrated terminal exports `CLAUDE_CODE_SSE_PORT` and
 `ENABLE_IDE_INTEGRATION`, which is what makes the connection automatic.
 
-The patch is small on purpose: one new crate, `crates/claude_code_ide/`, plus an 85-line graft into
+The patch is small on purpose: one new crate, `crates/claude_code_ide/`, plus a 43-line graft into
 existing Zed code. Keeping it that small is what makes tracking upstream cheap — moving from Zed
 1.16.3 to 1.17.2, across 118 upstream commits, took a one-line fix. See
 [`crates/claude_code_ide/README.md`](../crates/claude_code_ide/README.md).
@@ -107,7 +107,7 @@ on demand, so they are never out of date with the branch. Every release from `cc
 
 - [**`.diff`**](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched.diff)
   — one flat diff, about 200 KB. `git apply` it to a checkout of upstream `v1.17.2` and you have
-  this fork. Verified: it applies clean, and the graft measures 85 lines in the result.
+  this fork. Verified: it applies clean, and the graft measures 43 lines in the result.
 - [**`.patch`**](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched.patch)
   — the same change as its individual commits, authorship intact. Apply it with
   `git -c core.symlinks=false am`: without that flag it stops partway, on a commit that adds

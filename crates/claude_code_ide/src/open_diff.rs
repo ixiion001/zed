@@ -10,13 +10,17 @@
 
 use crate::server::{ProtocolError, error_codes};
 use buffer_diff::{BufferDiff, DiffBaseKind};
+use collections::HashMap;
 use editor::{DiffViewStyle, MultiBuffer, SelectionEffects, SplittableEditor, scroll::Autoscroll};
 use futures::channel::oneshot;
-use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, DismissEvent, WeakEntity};
+use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, DismissEvent, TaskExt as _, WeakEntity};
 use language::Buffer;
 use serde_json::{Value, json};
 use ui::{Color, IconName};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 use workspace::{
     SaveIntent, SplitDirection, Workspace,
     notifications::{NotificationId, simple_message_notification::MessageNotification},
@@ -25,9 +29,33 @@ use workspace::{
 /// Distinguishes our notification from others in the notification registry.
 struct ClaudeDiffNotification;
 
+/// The diffs one connection is waiting on, keyed by the CLI's `tab_name`.
+///
+/// The map owns each request's decision sender, so an entry *is* the open
+/// request: removing it without an answer rejects it (the receiver reads a
+/// dropped sender as `false`), and dropping the whole map -- the connection is
+/// gone -- rejects everything still pending, which is what lets each diff's
+/// task clean up after a CLI that died mid-decision. Callbacks that can outlive
+/// the connection hold only a [`Weak`] to the map, so they never keep those
+/// requests alive.
+pub type PendingDiffs = Rc<Pending>;
+type Pending = RefCell<HashMap<String, oneshot::Sender<bool>>>;
+
+/// Settles the request for `tab_name`, if it is still pending.
+fn resolve(pending: &Weak<Pending>, tab_name: &str, accepted: bool) {
+    let Some(pending) = pending.upgrade() else {
+        return;
+    };
+    let sender = pending.borrow_mut().remove(tab_name);
+    if let Some(sender) = sender {
+        sender.send(accepted).ok();
+    }
+}
+
 pub async fn open_diff(
     workspace: WeakEntity<Workspace>,
     window: Option<AnyWindowHandle>,
+    pending: &PendingDiffs,
     arguments: Value,
     cx: &mut AsyncApp,
 ) -> Result<Value, ProtocolError> {
@@ -64,9 +92,6 @@ pub async fn open_diff(
         })?
     };
 
-    let (decision_tx, decision_rx) = oneshot::channel::<bool>();
-    let decision_tx = Rc::new(RefCell::new(Some(decision_tx)));
-
     let message = format!("Claude proposes changes to {old_file_path}");
 
     // Build the proposed buffer and start computing the diff against the old
@@ -98,17 +123,19 @@ pub async fn open_diff(
 
     base_ready.await;
 
+    let notification_id = NotificationId::composite::<ClaudeDiffNotification>(tab_name.clone());
+    let weak_pending = Rc::downgrade(pending);
     let editor_id = window
         .update(cx, |_root, window, cx| {
             let multibuffer = cx.new(|cx| {
                 let mut multibuffer = MultiBuffer::singleton(buffer.clone(), cx);
                 multibuffer.add_diff(diff, cx);
+                // A buffer without a file is otherwise titled by its first line.
+                multibuffer.set_title(tab_name.clone(), cx);
                 multibuffer
             });
 
-            let Some(workspace_entity) = workspace.upgrade() else {
-                return None;
-            };
+            let workspace_entity = workspace.upgrade()?;
             let project = workspace_entity.read(cx).project().clone();
 
             // `DiffViewStyle::Split` renders side-by-side (old on the left, new on
@@ -126,24 +153,35 @@ pub async fn open_diff(
             });
             let editor_id = diff_editor.entity_id();
 
+            // Closing the tab by hand is a rejection too. The observer runs inside
+            // the app borrow, so it touches nothing but the map.
+            cx.observe_release(&diff_editor, {
+                let pending = weak_pending.clone();
+                let tab_name = tab_name.clone();
+                move |_, _| resolve(&pending, &tab_name, false)
+            })
+            .detach();
+
             workspace_entity.update(cx, |workspace, cx| {
-                // The active pane holds Claude's integrated terminal: the CLI has
-                // focus there when it sends `openDiff`. Show the diff in any other
-                // pane so it doesn't cover the terminal; if the terminal is the
-                // only pane, split a new one off to its left.
-                let active_pane_id = workspace.active_pane().entity_id();
+                // Claude's terminal normally lives in the bottom dock, whose pane
+                // is never `active_pane` (that tracks centre panes only), so only
+                // `focused_pane` sees where the CLI really is. Show the diff in
+                // the first centre pane that is not it, without taking focus: the
+                // user is mid-conversation in the terminal and decides through
+                // the notification. Split only if the focused pane is the sole one.
+                let focused_pane = workspace.focused_pane(window, cx);
                 let other_pane = workspace
                     .panes()
                     .iter()
-                    .find(|pane| pane.entity_id() != active_pane_id)
+                    .find(|pane| **pane != focused_pane)
                     .cloned();
                 if let Some(target_pane) = other_pane {
                     workspace.add_item(
                         target_pane,
                         Box::new(diff_editor.clone()),
                         None,
-                        true,
-                        true,
+                        false,
+                        false,
                         window,
                         cx,
                     );
@@ -156,35 +194,39 @@ pub async fn open_diff(
                     );
                 }
 
-                let tx_keep = decision_tx.clone();
-                let tx_reject = decision_tx.clone();
-                workspace.show_notification(
-                    NotificationId::composite::<ClaudeDiffNotification>(tab_name),
-                    cx,
+                workspace.show_notification(notification_id.clone(), cx, {
+                    let pending = weak_pending.clone();
+                    let tab_name = tab_name.clone();
                     move |cx| {
-                        cx.new(|cx| {
+                        let notification = cx.new(|cx| {
                             MessageNotification::new(message, cx)
                                 .primary_message("Keep")
                                 .primary_icon(IconName::Check)
                                 .primary_icon_color(Color::Success)
-                                .primary_on_click(move |_window, cx| {
-                                    if let Some(tx) = tx_keep.borrow_mut().take() {
-                                        let _ = tx.send(true);
+                                .primary_on_click({
+                                    let pending = pending.clone();
+                                    let tab_name = tab_name.clone();
+                                    move |_window, cx| {
+                                        resolve(&pending, &tab_name, true);
+                                        cx.emit(DismissEvent);
                                     }
-                                    cx.emit(DismissEvent);
                                 })
                                 .secondary_message("Reject")
                                 .secondary_icon(IconName::Close)
                                 .secondary_icon_color(Color::Error)
-                                .secondary_on_click(move |_window, cx| {
-                                    if let Some(tx) = tx_reject.borrow_mut().take() {
-                                        let _ = tx.send(false);
-                                    }
-                                    cx.emit(DismissEvent);
-                                })
+                                .secondary_on_click(|_window, cx| cx.emit(DismissEvent))
+                        });
+                        // Reject, the close button and "don't show again" all end
+                        // in a dismissal, and a dismissed request nobody kept is
+                        // rejected. Keep's handler runs before this event is
+                        // delivered, so its answer wins.
+                        cx.subscribe(&notification, move |_, _, _: &DismissEvent, _| {
+                            resolve(&pending, &tab_name, false)
                         })
-                    },
-                );
+                        .detach();
+                        notification
+                    }
+                });
             });
 
             // Center the view on the first change so the user lands on the diff
@@ -206,43 +248,51 @@ pub async fn open_diff(
             });
             Some(editor_id)
         })
-        .map_err(|error| ProtocolError::internal(error.to_string()))?;
+        .map_err(|error| ProtocolError::internal(error.to_string()))?
+        .ok_or_else(|| ProtocolError::internal("workspace closed before the diff could open"))?;
 
-    // Hand the sender over entirely to the Keep and Reject callbacks, which took
-    // their own clones above. Holding this one across the await keeps the
-    // channel open no matter what the user does, so the "dropped sender" case
-    // below could never actually happen: dismissing the notification with its X
-    // -- shown by default -- or suppressing it destroys both callbacks and
-    // nothing else would ever resolve the receiver. The request then hangs
-    // forever, and because the read loop awaits each message in turn, the whole
-    // connection hangs with it.
-    drop(decision_tx);
+    // Registered only now that the tab and the notification exist, so an error
+    // above leaves nothing to reject. A repeated `tab_name` replaces the earlier
+    // sender, which rejects that request rather than leave two tabs racing.
+    let (decision_tx, decision_rx) = oneshot::channel::<bool>();
+    pending.borrow_mut().insert(tab_name, decision_tx);
 
-    // Block until the user clicks Keep/Reject. A dropped sender -- window
-    // closed, or the notification dismissed without choosing -- resolves to
-    // `false`, i.e. rejected.
-    let accepted = decision_rx.await.unwrap_or(false);
+    // The wait and the cleanup run in their own task: a connection dying
+    // mid-diff cancels this future, but the map that died with it dropped our
+    // sender, so the task wakes with `Err`, reads it as rejected, and still
+    // removes the tab and the notification.
+    let (result_tx, result_rx) = oneshot::channel();
+    cx.spawn({
+        let workspace = workspace.clone();
+        async move |cx| {
+            let accepted = decision_rx.await.unwrap_or(false);
+            // Read the final buffer contents (the user may have edited the
+            // proposed side) and close the diff tab now that the decision is made.
+            let final_contents = window.update(cx, |_root, window, cx| {
+                let final_contents = buffer.read(cx).text();
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.dismiss_notification(&notification_id, cx);
+                        for pane in workspace.panes().to_vec() {
+                            pane.update(cx, |pane, cx| {
+                                pane.close_item_by_id(editor_id, SaveIntent::Skip, window, cx)
+                            })
+                            .detach_and_log_err(cx);
+                        }
+                    });
+                }
+                final_contents
+            });
+            result_tx.send((accepted, final_contents)).ok();
+        }
+    })
+    .detach();
 
-    // Read the final buffer contents (the user may have edited the proposed
-    // side) and close the diff tab now that the decision is made.
-    let final_contents = window
-        .update(cx, |_root, window, cx| {
-            let final_contents = buffer.read(cx).text();
-            if let Some(editor_id) = editor_id
-                && let Some(workspace_entity) = workspace.upgrade()
-            {
-                workspace_entity.update(cx, |workspace, cx| {
-                    for pane in workspace.panes().to_vec() {
-                        pane.update(cx, |pane, cx| {
-                            pane.close_item_by_id(editor_id, SaveIntent::Skip, window, cx)
-                        })
-                        .detach();
-                    }
-                });
-            }
-            final_contents
-        })
-        .map_err(|error| ProtocolError::internal(error.to_string()))?;
+    let (accepted, final_contents) = result_rx
+        .await
+        .map_err(|_| ProtocolError::internal("the diff view went away before a decision"))?;
+    let final_contents =
+        final_contents.map_err(|error| ProtocolError::internal(error.to_string()))?;
 
     // The official IDE protocol has the IDE return the accepted contents and the
     // CLI perform the write, so we must not write the file here ourselves.

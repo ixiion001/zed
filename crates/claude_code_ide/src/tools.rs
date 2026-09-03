@@ -42,43 +42,9 @@ impl WorkspaceDispatcher {
                 let Some(editor) = workspace.active_item_as::<Editor>(cx) else {
                     return json!({ "success": false, "message": "No active editor found" });
                 };
-
-                editor.update(cx, |editor, cx| {
-                    let display_snapshot = editor.display_snapshot(cx);
-                    let cursor = editor.selections.newest::<Point>(&display_snapshot);
-
-                    let path = editor
-                        .buffer()
-                        .read(cx)
-                        .as_singleton()
-                        .and_then(|buffer| local_abs_path(buffer.read(cx), cx))
-                        .unwrap_or_default();
-
-                    let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
-                    let text: String = buffer_snapshot
-                        .text_for_range(cursor.start..cursor.end)
-                        .collect();
-
-                    // `character` is a UTF-16 offset, as VS Code defines it and
-                    // the CLI expects, but `Point::column` counts UTF-8 bytes.
-                    // They agree only on ASCII lines; an accent, a CJK character
-                    // or an emoji earlier in the line shifts every column after
-                    // it and the CLI resolves the selection to the wrong span.
-                    let start = buffer_snapshot.point_to_point_utf16(cursor.start);
-                    let end = buffer_snapshot.point_to_point_utf16(cursor.end);
-
-                    json!({
-                        "success": true,
-                        "text": text,
-                        "filePath": path,
-                        "fileUrl": file_uri(&path),
-                        "selection": {
-                            "start": { "line": start.row, "character": start.column },
-                            "end": { "line": end.row, "character": end.column },
-                            "isEmpty": cursor.start == cursor.end,
-                        }
-                    })
-                })
+                let mut payload = selection_payload(&editor, cx);
+                payload["success"] = json!(true);
+                payload
             })
             .map_err(|error| ProtocolError::internal(error.to_string()))?;
 
@@ -322,6 +288,45 @@ impl WorkspaceDispatcher {
         save_task.await.map_err(|error| ProtocolError::internal(error.to_string()))?;
         Ok(mcp_text(json!({ "success": true, "filePath": path })))
     }
+}
+
+/// The editor's newest selection as the protocol describes one: the selected
+/// text, the file's native path, and 0-based positions. This is both the
+/// `getCurrentSelection` reply and the `selection_changed` notification.
+pub fn selection_payload(editor: &Entity<Editor>, cx: &mut App) -> Value {
+    editor.update(cx, |editor, cx| {
+        let display_snapshot = editor.display_snapshot(cx);
+        let cursor = editor.selections.newest::<Point>(&display_snapshot);
+
+        let path = editor
+            .buffer()
+            .read(cx)
+            .as_singleton()
+            .and_then(|buffer| local_abs_path(buffer.read(cx), cx))
+            .unwrap_or_default();
+
+        let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
+        let text: String = buffer_snapshot.text_for_range(cursor.start..cursor.end).collect();
+
+        // `character` is a UTF-16 offset, as VS Code defines it and the CLI
+        // expects, but `Point::column` counts UTF-8 bytes. They agree only on
+        // ASCII lines; an accent, a CJK character or an emoji earlier in the
+        // line shifts every column after it and the CLI resolves the selection
+        // to the wrong span.
+        let start = buffer_snapshot.point_to_point_utf16(cursor.start);
+        let end = buffer_snapshot.point_to_point_utf16(cursor.end);
+
+        json!({
+            "text": text,
+            "filePath": path,
+            "fileUrl": file_uri(&path),
+            "selection": {
+                "start": { "line": start.row, "character": start.column },
+                "end": { "line": end.row, "character": end.column },
+                "isEmpty": cursor.start == cursor.end,
+            }
+        })
+    })
 }
 
 /// Formats an absolute path as a `file://` URI.

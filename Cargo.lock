@@ -3019,6 +3019,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
+ "terminal_view",
  "text",
  "ui",
  "util",

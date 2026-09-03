@@ -14,7 +14,9 @@ use async_tungstenite::tungstenite::{
     handshake::server::{ErrorResponse, Request, Response},
     http,
 };
-use futures::{AsyncRead, AsyncWrite, StreamExt as _, select, stream::FuturesUnordered};
+use futures::{
+    AsyncRead, AsyncWrite, StreamExt as _, channel::mpsc, select, stream::FuturesUnordered,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -104,8 +106,16 @@ pub async fn bind() -> Result<(smol::net::TcpListener, u16)> {
 }
 
 /// Performs the WebSocket handshake (validating the auth header against
-/// `auth_token`), then serves JSON-RPC requests until the client disconnects.
-pub async fn serve_connection<S, D>(stream: S, auth_token: String, dispatcher: D) -> Result<()>
+/// `auth_token`), then serves JSON-RPC requests until the client disconnects
+/// or `outbound` closes. Anything sent through `outbound` -- notifications
+/// such as `selection_changed`, which only the IDE can initiate -- goes to the
+/// client as a text frame.
+pub async fn serve_connection<S, D>(
+    stream: S,
+    auth_token: String,
+    dispatcher: D,
+    mut outbound: mpsc::UnboundedReceiver<String>,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     D: Dispatcher,
@@ -164,6 +174,7 @@ where
     enum Event {
         Closed,
         Frame(Message),
+        Push(String),
         Finished(Option<String>),
     }
 
@@ -173,6 +184,12 @@ where
                 None => Event::Closed,
                 Some(message) => Event::Frame(message.context("reading websocket frame")?),
             },
+            pushed = outbound.next() => match pushed {
+                // The sender lives in the server entity; it going away means
+                // the window is closing and there is nothing left to serve.
+                None => Event::Closed,
+                Some(text) => Event::Push(text),
+            },
             finished = in_flight.select_next_some() => Event::Finished(finished),
         };
 
@@ -180,6 +197,9 @@ where
             Event::Closed => break,
             Event::Frame(Message::Text(text)) => {
                 in_flight.push(async move { handle_message(text.as_str(), dispatcher).await });
+            }
+            Event::Push(text) => {
+                outgoing.send(Message::Text(text.into())).await.context("sending notification")?;
             }
             // Reply to keepalive pings so the CLI doesn't consider us dead.
             Event::Frame(Message::Ping(payload)) => {

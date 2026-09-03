@@ -3015,6 +3015,7 @@ dependencies = [
  "language",
  "log",
  "paths",
+ "project",
  "serde",
  "serde_json",
  "smol",

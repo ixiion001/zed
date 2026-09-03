@@ -15,17 +15,19 @@ patch, being turned into a cross-platform distribution.
 
 ## What the patch is
 
-`crates/claude_code_ide/` (1721 lines of Rust; ~1360 as **vitaly-andr** first wrote it) runs a
+`crates/claude_code_ide/` (~1900 lines of Rust; ~1360 as **vitaly-andr** first wrote it) runs a
 per-window WebSocket server so the unmodified `claude` CLI connects to Zed the way it connects to VS
-Code — discovery via `~/.claude/ide/<port>.lock`, transport JSON-RPC 2.0 / MCP. Plus an **85-line
+Code — discovery via `~/.claude/ide/<port>.lock`, transport JSON-RPC 2.0 / MCP. Plus a **43-line
 graft** into existing Zed code: `crates/project/src/project.rs` stores the bound port (18 lines),
 `crates/project/src/terminals.rs` injects `CLAUDE_CODE_SSE_PORT` + `ENABLE_IDE_INTEGRATION` into
-integrated terminals and withholds them from remote ones (63 lines, three call sites),
-`crates/zed/src/main.rs` calls `claude_code_ide::init(cx)` (1 line), and two `Cargo.toml` entries.
+local integrated terminals inside `resolve_directory_environment`, the one function all three spawn
+paths call (21 lines), `crates/zed/src/main.rs` calls `claude_code_ide::init(cx)` (1 line), and two
+`Cargo.toml` entries.
 
 That graft is the entire long-term maintenance surface, and it is the number to watch. It was 46
-lines when the crate arrived; `95bc78c320` took it to 85 by adding the check that keeps the IDE port
-away from remote terminals. Worth it, but the direction is one-way unless someone is counting.
+lines when the crate arrived; `95bc78c320` took it to 85 by pasting the remote-terminal check into
+all three spawn paths; the review-fixes series brought it back to 43 by injecting once, one level
+down. The direction is one-way unless someone is counting.
 
 Do not trust the figure above — it drifted from 43 to 85 while still being quoted as 43. Measure it:
 

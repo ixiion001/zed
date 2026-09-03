@@ -624,6 +624,9 @@
   {
     "context": "Workspace",
     "bindings": {
+      // Claude Code IDE integration: insert the active editor's selection into
+      // the CLI prompt as an @ mention, the VS Code extension's shortcut.
+      "ctrl-alt-k": "claude_code_ide::MentionSelection",
       // Move focus between the major regions of the window (editor, open
       // panels, status bar). Accessibility navigation; mirrors VS Code's
       // "Focus Next/Previous Part". `ctrl-f6` mirrors `f6` so region navigation

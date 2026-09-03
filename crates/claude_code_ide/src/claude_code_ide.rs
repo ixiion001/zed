@@ -24,16 +24,25 @@ use editor::{Editor, EditorEvent};
 use futures::channel::mpsc;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, AsyncApp, Context, Entity, EntityId, Subscription, Task,
-    WeakEntity,
+    WeakEntity, actions,
 };
 use project::Project;
-use serde_json::json;
+use serde_json::{Value, json};
 use util::ResultExt as _;
 use workspace::Workspace;
 
 use lockfile::generate_auth_token;
 use server::{bind, serve_connection};
 use tools::{WorkspaceDispatcher, selection_payload};
+
+actions!(
+    claude_code_ide,
+    [
+        /// Inserts the active editor's file and selected lines into the Claude
+        /// Code prompt as an `@` mention, like Cmd+Option+K in VS Code.
+        MentionSelection
+    ]
+);
 
 /// Registers a Claude Code IDE server for every local workspace window.
 ///
@@ -57,6 +66,19 @@ pub fn init(cx: &mut App) {
             let window_handle = window.map(|window| window.window_handle());
             let server = cx.new(|cx| {
                 ClaudeCodeIdeServer::new(&workspace_handle, &project, window_handle, cx)
+            });
+            // The mention comes from the workspace's active item rather than
+            // from focus, so the shortcut works while the user is typing in
+            // Claude's terminal.
+            workspace.register_action({
+                let server = server.downgrade();
+                move |workspace, _: &MentionSelection, _window, cx| {
+                    if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
+                        server
+                            .update(cx, |server, cx| server.push_at_mention(&editor, cx))
+                            .log_err();
+                    }
+                }
             });
             servers.borrow_mut().insert(workspace_id, server);
 
@@ -281,12 +303,33 @@ impl ClaudeCodeIdeServer {
     /// push is what puts "N lines selected" in its footer and the selection
     /// into the model's context.
     fn push_selection(&mut self, editor: &Entity<Editor>, cx: &mut App) {
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "selection_changed",
-            "params": selection_payload(editor, cx),
-        })
-        .to_string();
+        self.broadcast("selection_changed", selection_payload(editor, cx));
+    }
+
+    /// Asks every connected CLI to insert `@file#Lstart-end` into its prompt.
+    /// Rows go out 0-based, as the CLI adds one itself. A selection that ends
+    /// at column 0 of the next line does not include that line, which is how
+    /// the CLI's own "N lines selected" counts it.
+    fn push_at_mention(&mut self, editor: &Entity<Editor>, cx: &mut App) {
+        let payload = selection_payload(editor, cx);
+        if payload["filePath"] == "" {
+            return;
+        }
+        let row = |point: &Value| point["line"].as_u64().unwrap_or(0);
+        let (start, end) = (&payload["selection"]["start"], &payload["selection"]["end"]);
+        let mut line_end = row(end);
+        if end["character"] == 0 && line_end > row(start) {
+            line_end -= 1;
+        }
+        self.broadcast(
+            "at_mentioned",
+            json!({ "filePath": payload["filePath"], "lineStart": row(start), "lineEnd": line_end }),
+        );
+    }
+
+    fn broadcast(&mut self, method: &str, params: Value) {
+        let notification =
+            json!({ "jsonrpc": "2.0", "method": method, "params": params }).to_string();
         self.connections
             .retain(|connection| connection.unbounded_send(notification.clone()).is_ok());
     }

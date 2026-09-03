@@ -139,10 +139,9 @@ where
             }
             Ok(response)
         } else {
-            let denied = http::Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Some("invalid or missing authorization token".to_string()))
-                .expect("static unauthorized response is valid");
+            let mut denied =
+                http::Response::new(Some("invalid or missing authorization token".to_string()));
+            *denied.status_mut() = http::StatusCode::UNAUTHORIZED;
             Err(denied)
         }
     };

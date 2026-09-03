@@ -135,12 +135,4 @@ mod tests {
         assert_eq!(value["runningInWindows"], true);
         assert_eq!(value["authToken"], "the-token");
     }
-
-    #[test]
-    fn lock_dir_honors_claude_config_dir() {
-        // Documents the resolution rule; we avoid mutating process env here to
-        // keep the test free of global state.
-        let default_dir = paths::home_dir().join(".claude").join("ide");
-        assert!(default_dir.ends_with(".claude/ide"));
-    }
 }

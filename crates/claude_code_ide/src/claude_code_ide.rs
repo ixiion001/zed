@@ -29,11 +29,11 @@ use gpui::{
 use project::Project;
 use serde_json::{Value, json};
 use util::ResultExt as _;
-use workspace::Workspace;
+use workspace::{Toast, Workspace, notifications::NotificationId};
 
 use lockfile::generate_auth_token;
 use server::{bind, serve_connection};
-use tools::{WorkspaceDispatcher, selection_payload};
+use tools::{WorkspaceDispatcher, selection_payload, selection_range};
 
 actions!(
     claude_code_ide,
@@ -73,10 +73,16 @@ pub fn init(cx: &mut App) {
             workspace.register_action({
                 let server = server.downgrade();
                 move |workspace, _: &MentionSelection, _window, cx| {
-                    if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
-                        server
+                    let outcome = match workspace.active_item_as::<Editor>(cx) {
+                        Some(editor) => server
                             .update(cx, |server, cx| server.push_at_mention(&editor, cx))
-                            .log_err();
+                            .unwrap_or(Err("this window has no Claude Code server")),
+                        None => Err("open a file in the centre pane to mention its selection"),
+                    };
+                    // A shortcut that does nothing leaves the user guessing why.
+                    if let Err(reason) = outcome {
+                        let id = NotificationId::named("claude-code-ide-mention".into());
+                        workspace.show_toast(Toast::new(id, format!("Claude Code: {reason}")), cx);
                     }
                 }
             });
@@ -306,25 +312,31 @@ impl ClaudeCodeIdeServer {
         self.broadcast("selection_changed", selection_payload(editor, cx));
     }
 
-    /// Asks every connected CLI to insert `@file#Lstart-end` into its prompt.
-    /// Rows go out 0-based, as the CLI adds one itself. A selection that ends
-    /// at column 0 of the next line does not include that line, which is how
-    /// the CLI's own "N lines selected" counts it.
-    fn push_at_mention(&mut self, editor: &Entity<Editor>, cx: &mut App) {
-        let payload = selection_payload(editor, cx);
-        if payload["filePath"] == "" {
-            return;
+    /// Asks every connected CLI to insert `@file#Lstart-end` into its prompt,
+    /// or says why it cannot. Rows go out 0-based, as the CLI adds one itself.
+    /// A selection that ends at column 0 of the next line does not include
+    /// that line, which is how the CLI's own "N lines selected" counts it.
+    fn push_at_mention(
+        &mut self,
+        editor: &Entity<Editor>,
+        cx: &mut App,
+    ) -> Result<(), &'static str> {
+        if self.connections.is_empty() {
+            return Err("no CLI session is connected to this window");
         }
-        let row = |point: &Value| point["line"].as_u64().unwrap_or(0);
-        let (start, end) = (&payload["selection"]["start"], &payload["selection"]["end"]);
-        let mut line_end = row(end);
-        if end["character"] == 0 && line_end > row(start) {
+        let (path, range) = selection_range(editor, cx);
+        if path.is_empty() {
+            return Err("save the file before mentioning it");
+        }
+        let mut line_end = range.end.row;
+        if range.end.column == 0 && line_end > range.start.row {
             line_end -= 1;
         }
         self.broadcast(
             "at_mentioned",
-            json!({ "filePath": payload["filePath"], "lineStart": row(start), "lineEnd": line_end }),
+            json!({ "filePath": path, "lineStart": range.start.row, "lineEnd": line_end }),
         );
+        Ok(())
     }
 
     fn broadcast(&mut self, method: &str, params: Value) {

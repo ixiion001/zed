@@ -290,6 +290,14 @@ impl WorkspaceDispatcher {
     }
 }
 
+/// Selected text beyond this many bytes is cut short, with a note saying so.
+/// The CLI repeats the selection into the model's context with every prompt
+/// while it stays active, so a select-all in a large file would spend a
+/// sizeable share of even a 1M-token window on each turn. 32 KiB is roughly
+/// 8k tokens, or 800 lines of code; anything larger is better mentioned as
+/// `@file#Lstart-end`, which the CLI reads once.
+const SELECTION_TEXT_LIMIT: usize = 32 * 1024;
+
 /// The editor's newest selection as the protocol describes one: the selected
 /// text, the file's native path, and 0-based positions. This is both the
 /// `getCurrentSelection` reply and the `selection_changed` notification.
@@ -306,7 +314,16 @@ pub fn selection_payload(editor: &Entity<Editor>, cx: &mut App) -> Value {
             .unwrap_or_default();
 
         let buffer_snapshot = editor.buffer().read(cx).snapshot(cx);
-        let text: String = buffer_snapshot.text_for_range(cursor.start..cursor.end).collect();
+        let mut text: String =
+            buffer_snapshot.text_for_range(cursor.start..cursor.end).collect();
+        if text.len() > SELECTION_TEXT_LIMIT {
+            let mut cut = SELECTION_TEXT_LIMIT;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str("\n[selection cut short by Zed at 32 KiB; mention the file and line range to read all of it]");
+        }
 
         // `character` is a UTF-16 offset, as VS Code defines it and the CLI
         // expects, but `Point::column` counts UTF-8 bytes. They agree only on

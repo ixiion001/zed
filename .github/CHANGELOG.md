@@ -16,7 +16,13 @@ Fifteen findings from a code review of the patch, several verified against the C
   write files under `.github/workflows/` -- and upstream changes those between most releases (seven
   between v1.17.2 and v1.18.0). The first rebase onto v1.18.0 died there after a green check and test.
   The PAT now needs the repository permission *Workflows: read and write* as well as *Contents*. A
-  refused push opens an issue saying so instead of failing silently.
+  refused push opens an issue saying so instead of failing silently. The checkout no longer persists
+  `GITHUB_TOKEN` in git's config: `actions/checkout` stores it in a credentials file that an `includeIf`
+  pulls into every git command, and git sends that header even when the push URL carries the PAT, so
+  the PAT never authenticated (GitHub answered for "a GitHub App"). Every push now names its token.
+- `auto-rebase` opens its issues through the REST endpoint. The GraphQL `createIssue` mutation behind
+  `gh issue create` was refused with `Resource not accessible by integration` although the job token
+  held `issues: write`, so no report the job ever tried to file had reached the tracker.
 - `auto-rebase` hands the PAT to the step that tags. It was declared on the rebase step only, so the
   tagging step always saw it absent and asked for a manual tag; no release was ever started by the job.
 - `getDiagnostics` answers in the shape the CLI parses: one text block holding a JSON array of

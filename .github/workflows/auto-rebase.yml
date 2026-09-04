@@ -78,6 +78,14 @@ jobs:
           # The rebase needs real history, and `git describe` needs the upstream
           # tag this series currently sits on.
           fetch-depth: 0
+          # Do not leave GITHUB_TOKEN in git's config. The checkout action
+          # stores it in a credentials file that an includeIf pulls into every
+          # git command, and git sends that header even when a push URL carries
+          # its own token -- so the PAT below would silently never be used and
+          # GitHub would keep answering for "a GitHub App". Every push in this
+          # job names its token in the URL instead; `gh` authenticates through
+          # GH_TOKEN and is unaffected. Fetches here are from public repos.
+          persist-credentials: false
 
       - name: Work out where we are and where upstream is
         id: target
@@ -217,7 +225,7 @@ jobs:
           # this job ran: the label existed, the lookup said it did not, and the
           # whole report was lost. On these paths the issue is the only thing the
           # job produces, so nothing cosmetic is allowed to be able to sink it.
-          url=$(gh issue create --title "$title" --body-file issue.md)
+          url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
           exit 1
@@ -302,7 +310,7 @@ jobs:
           # this job ran: the label existed, the lookup said it did not, and the
           # whole report was lost. On these paths the issue is the only thing the
           # job produces, so nothing cosmetic is allowed to be able to sink it.
-          url=$(gh issue create --title "$title" --body-file issue.md)
+          url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
 
@@ -325,16 +333,13 @@ jobs:
           # upstream's own changes under .github/workflows/, which GITHUB_TOKEN
           # is never allowed to write (see the header). Actions masks the secret
           # in logs; the issue body below redacts it by hand.
+          # Nothing is persisted in git's config (see the checkout step), so
+          # each push names its token in the URL; without a PAT that is the job
+          # token, which fails only when upstream touched a workflow file.
           if [ -n "${CC_RELEASE_PAT:-}" ]; then
-            # actions/checkout persisted GITHUB_TOKEN as an `http.extraheader`,
-            # and git sends that header even when the URL carries its own
-            # credentials, so the PAT would never reach GitHub. Drop the header
-            # for the rest of this step; the checkout's post-step tolerates it
-            # being gone. `gh` is unaffected: it authenticates via GH_TOKEN.
-            git config --unset-all http.https://github.com/.extraheader || true
             push_to="https://x-access-token:${CC_RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           else
-            push_to=origin
+            push_to="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
           if ! git push --force "$push_to" "auto/$NEW" 2> push.err; then
             sed 's#x-access-token:[^@]*@#x-access-token:***@#' push.err >&2
@@ -356,7 +361,7 @@ jobs:
           write** next to **Contents: read and write**. Fix the token, then re-run
           [auto-rebase](../../actions/workflows/auto-rebase.yml).
           BODY
-              url=$(gh issue create --title "$title" --body-file issue.md)
+              url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
               echo "$url"
               gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
             fi
@@ -448,6 +453,6 @@ jobs:
           # this job ran: the label existed, the lookup said it did not, and the
           # whole report was lost. On these paths the issue is the only thing the
           # job produces, so nothing cosmetic is allowed to be able to sink it.
-          url=$(gh issue create --title "$title" --body-file issue.md)
+          url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true

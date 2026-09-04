@@ -12,6 +12,13 @@ Fifteen findings from a code review of the patch, several verified against the C
 
 ### Fixed
 
+- `auto-rebase` pushes `auto/<tag>` with the release PAT instead of `GITHUB_TOKEN`, which may never
+  write files under `.github/workflows/` -- and upstream changes those between most releases (seven
+  between v1.17.2 and v1.18.0). The first rebase onto v1.18.0 died there after a green check and test.
+  The PAT now needs the repository permission *Workflows: read and write* as well as *Contents*. A
+  refused push opens an issue saying so instead of failing silently.
+- `auto-rebase` hands the PAT to the step that tags. It was declared on the rebase step only, so the
+  tagging step always saw it absent and asked for a manual tag; no release was ever started by the job.
 - `getDiagnostics` answers in the shape the CLI parses: one text block holding a JSON array of
   `{uri, diagnostics: [{message, severity, range, source}]}`, 0-based, severity as a name, the
   requested `uri` echoed verbatim. Before, the CLI's post-edit diagnostics check failed silently on

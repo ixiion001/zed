@@ -326,6 +326,12 @@ jobs:
           # is never allowed to write (see the header). Actions masks the secret
           # in logs; the issue body below redacts it by hand.
           if [ -n "${CC_RELEASE_PAT:-}" ]; then
+            # actions/checkout persisted GITHUB_TOKEN as an `http.extraheader`,
+            # and git sends that header even when the URL carries its own
+            # credentials, so the PAT would never reach GitHub. Drop the header
+            # for the rest of this step; the checkout's post-step tolerates it
+            # being gone. `gh` is unaffected: it authenticates via GH_TOKEN.
+            git config --unset-all http.https://github.com/.extraheader || true
             push_to="https://x-access-token:${CC_RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           else
             push_to=origin

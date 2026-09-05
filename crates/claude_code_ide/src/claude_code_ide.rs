@@ -10,11 +10,19 @@
 //! a loopback port, writes the lock file, serves connections until the window
 //! closes, and pushes `selection_changed` to every connected CLI as the user
 //! moves around, which is the only way the CLI learns what is selected.
+//!
+//! The same startup hook registers a private native Codex IPC provider. Its
+//! protocol, router and workspace registry live in `codex`; see `CODEX.md` for
+//! the pinned compatibility evidence and remaining platform acceptance gates.
 
+mod codex;
+mod editor_context;
 mod lockfile;
 mod open_diff;
 mod server;
 mod tools;
+
+pub use codex::CodexIdeStatus;
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -51,6 +59,7 @@ actions!(
 /// entity, kept alive in `servers` for the window's lifetime and dropped (which
 /// removes its lock file) when the workspace is released.
 pub fn init(cx: &mut App) {
+    codex::init(cx);
     let servers: Rc<RefCell<HashMap<EntityId, Entity<ClaudeCodeIdeServer>>>> = Rc::default();
     cx.observe_new({
         let servers = servers.clone();

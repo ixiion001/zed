@@ -5,7 +5,7 @@ build of the fork against Zed 1.16.3. Every release is published as a prerelease
 `/releases/latest` excludes prereleases, so nothing updates itself to a build that has not been
 promoted.
 
-## Unreleased — `main-patched` since cc-v1.17.2-1
+## cc-v1.18.0-1 — published 2026-09-04, promoted 2026-09-04
 
 Fifteen findings from a code review of the patch, several verified against the CLI binary
 (2.1.258). Two of them mean earlier builds did less than they appeared to.
@@ -57,6 +57,8 @@ Fifteen findings from a code review of the patch, several verified against the C
 
 ### Changed
 
+- Rebased onto upstream `v1.18.0` (from `v1.17.2`, 126 upstream commits) by the auto-rebase job:
+  zero conflicts, the graft is 52 added and 1 removed line over 8 files.
 - The graft into existing Zed code is 43 lines, down from 85: the terminal port injection lives
   once, in the function all three spawn paths call.
 

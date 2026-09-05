@@ -3,6 +3,7 @@
 //! the active workspace, editor, and buffers and shaping the result into the
 //! JSON the Claude Code CLI expects (mirroring the official extensions).
 
+use crate::editor_context::{bounded_text, local_abs_path, utf16_range};
 use crate::open_diff::{PendingDiffs, open_diff};
 use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
 use editor::Editor;
@@ -326,25 +327,14 @@ pub fn selection_payload(editor: &Entity<Editor>, cx: &mut App) -> Value {
 
     // Chunk by chunk, so a select-all in a huge file copies no more than the
     // cap on each cursor move rather than the whole buffer.
-    let mut text = String::new();
-    for chunk in snapshot.text_for_range(range.clone()) {
-        text.push_str(chunk);
-        if text.len() > SELECTION_TEXT_LIMIT {
-            text.truncate(text.floor_char_boundary(SELECTION_TEXT_LIMIT));
-            text.push_str(
-                "\n[selection cut short by Zed; mention the file and line range to read all of it]",
-            );
-            break;
-        }
+    let (mut text, truncated) =
+        bounded_text(snapshot.text_for_range(range.clone()), SELECTION_TEXT_LIMIT);
+    if truncated {
+        text.push_str(
+            "\n[selection cut short by Zed; mention the file and line range to read all of it]",
+        );
     }
-
-    // `character` is a UTF-16 offset, as VS Code defines it and the CLI
-    // expects, but `Point::column` counts UTF-8 bytes. They agree only on
-    // ASCII lines; an accent, a CJK character or an emoji earlier in the
-    // line shifts every column after it and the CLI resolves the selection
-    // to the wrong span.
-    let start = snapshot.point_to_point_utf16(range.start);
-    let end = snapshot.point_to_point_utf16(range.end);
+    let (start, end) = utf16_range(&snapshot, range.clone());
 
     json!({
         "text": text,
@@ -488,15 +478,6 @@ fn severity_name(severity: DiagnosticSeverity) -> &'static str {
 /// read each one without holding the store borrowed.
 fn open_buffers(workspace: &Workspace, cx: &App) -> Vec<Entity<Buffer>> {
     workspace.project().read(cx).buffer_store().read(cx).buffers().collect()
-}
-
-/// The absolute path of a buffer backed by a local file, as the protocol wants
-/// it: a plain native path. Remote and unsaved buffers have none.
-fn local_abs_path(buffer: &Buffer, cx: &App) -> Option<String> {
-    buffer
-        .file()
-        .and_then(|file| file.as_local())
-        .map(|file| file.abs_path(cx).to_string_lossy().into_owned())
 }
 
 /// Whether two absolute paths name the same file.

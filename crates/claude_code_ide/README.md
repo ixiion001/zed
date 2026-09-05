@@ -97,4 +97,6 @@ Edit a file through Claude and a Keep/Reject diff opens in the editor.
 ## Limitations
 
 - Keep/Reject hotkeys are intentionally omitted; use the notification buttons.
+- Zed 1.18+ starts no language server in a folder you have not marked as trusted, so
+  `getDiagnostics` for its files stays empty until you accept Zed's trust prompt.
 

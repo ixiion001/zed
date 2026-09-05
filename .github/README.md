@@ -99,16 +99,16 @@ existing Zed code. Keeping it that small is what makes tracking upstream cheap �
 You do not have to take that on trust. This compares official Zed against this fork — every
 line of the difference, nothing else:
 
-[`zed-industries/zed@v1.17.2 ... ixiion001:main-patched`](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched)
+[`zed-industries/zed@v1.18.0 ... ixiion001:main-patched`](https://github.com/zed-industries/zed/compare/v1.18.0...ixiion001:main-patched)
 
 To download the change rather than read it, append the format to that URL. GitHub generates both
 on demand, so they are never out of date with the branch. Every release from `cc-v1.17.2-1` on also
 **attaches the same diff**, gzipped and pinned to that build, so a release stays self-contained:
 
-- [**`.diff`**](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched.diff)
-  — one flat diff, about 200 KB. `git apply` it to a checkout of upstream `v1.17.2` and you have
+- [**`.diff`**](https://github.com/zed-industries/zed/compare/v1.18.0...ixiion001:main-patched.diff)
+  — one flat diff, about 200 KB. `git apply` it to a checkout of upstream `v1.18.0` and you have
   this fork. Verified: it applies clean, and the graft measures 43 lines in the result.
-- [**`.patch`**](https://github.com/zed-industries/zed/compare/v1.17.2...ixiion001:main-patched.patch)
+- [**`.patch`**](https://github.com/zed-industries/zed/compare/v1.18.0...ixiion001:main-patched.patch)
   — the same change as its individual commits, authorship intact. Apply it with
   `git -c core.symlinks=false am`: without that flag it stops partway, on a commit that adds
   `CLAUDE.md` before its file mode was corrected, with `File name too long`.
@@ -119,8 +119,8 @@ branch is rebased directly onto it:
 
 ```sh
 git remote add zed https://github.com/zed-industries/zed
-git fetch zed tag v1.17.2
-git diff --shortstat v1.17.2..main-patched -- \
+git fetch zed tag v1.18.0
+git diff --shortstat v1.18.0..main-patched -- \
   crates/project/ crates/zed/src/main.rs crates/zed/Cargo.toml Cargo.toml
 #   5 files changed, 85 insertions(+)
 ```

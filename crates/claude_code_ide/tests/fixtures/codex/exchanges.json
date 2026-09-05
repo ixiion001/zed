@@ -1,0 +1,10 @@
+{
+  "versions": {"cli": "0.153.4", "extension": "26.5901.22334"},
+  "initialize": {"type":"request","requestId":"init","sourceClientId":"initializing-client","method":"initialize","version":0,"params":{"clientType":"zed"}},
+  "initialized": {"type":"response","requestId":"init","resultType":"success","method":"initialize","handledByClientId":"zed-provider","result":{"clientId":"zed-provider"}},
+  "request": {"type":"request","requestId":"prompt-1","sourceClientId":"codex-tui","version":0,"method":"ide-context","params":{"workspaceRoot":"/repo"}},
+  "discovery": {"type":"client-discovery-request","requestId":"discovery-1","request":{"type":"request","requestId":"prompt-1","sourceClientId":"codex-tui","version":0,"method":"ide-context","params":{"workspaceRoot":"/repo"}}},
+  "discovered": {"type":"client-discovery-response","requestId":"discovery-1","response":{"canHandle":true}},
+  "response": {"type":"response","requestId":"prompt-1","resultType":"success","method":"ide-context","handledByClientId":"zed-provider","result":{"ideContext":{"activeFile":{"label":"main.rs","path":"/repo/src/main.rs","fsPath":"/repo/src/main.rs","selection":{"start":{"line":0,"character":3},"end":{"line":0,"character":5}},"selections":[{"start":{"line":0,"character":3},"end":{"line":0,"character":5}}],"activeSelectionContent":"世界"},"openTabs":[{"label":"main.rs","path":"/repo/src/main.rs","fsPath":"/repo/src/main.rs"}]}}},
+  "disconnected": {"type":"broadcast","method":"client-status-changed","sourceClientId":"zed-provider","version":0,"params":{"clientId":"zed-provider","clientType":"zed","status":"disconnected"}}
+}

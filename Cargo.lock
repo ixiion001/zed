@@ -3084,7 +3084,9 @@ dependencies = [
  "editor",
  "futures 0.3.32",
  "gpui",
+ "gpui_tokio",
  "language",
+ "libc",
  "log",
  "paths",
  "project",
@@ -3093,9 +3095,11 @@ dependencies = [
  "smol",
  "terminal_view",
  "text",
+ "tokio",
  "ui",
  "util",
  "uuid",
+ "windows 0.61.3",
  "workspace",
 ]
 

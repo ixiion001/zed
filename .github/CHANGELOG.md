@@ -5,7 +5,7 @@ build of the fork against Zed 1.16.3. Every release is published as a prerelease
 `/releases/latest` excludes prereleases, so nothing updates itself to a build that has not been
 promoted.
 
-## cc-v1.18.1-2
+## cc-v1.18.1-2 — published 2026-09-07, promoted 2026-09-07
 
 - Adds the native Codex IDE provider from `006511b1b4` to the existing Zed 1.18.1
   release, retaining the upstream fixes included in `cc-v1.18.1-1`.
@@ -19,6 +19,8 @@ promoted.
   Claude Code paths (diagnostics, selection push) were re-checked on the same build. Live
   application testing on macOS and Linux is still pending; CODEX.md records the macOS
   transport-level evidence.
+- Rebased onto upstream `v1.18.1` (from `v1.18.0`, 6 upstream commits) by the auto-rebase job
+  as `cc-v1.18.1-1`: zero conflicts, the graft is 43 added and 1 removed line over 5 files.
 
 ## cc-v1.18.0-1 — published 2026-09-04, promoted 2026-09-04
 

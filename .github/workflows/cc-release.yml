@@ -344,16 +344,30 @@ jobs:
           # Quoted heredoc: the body is full of backticks, which an unquoted one
           # would try to execute. Placeholders are filled in afterwards.
           cat > notes.md <<'NOTES'
-          **Unofficial build of [Zed](https://zed.dev) with native Claude Code IDE integration.**
+          **Unofficial build of [Zed](https://zed.dev) with native Claude Code and Codex IDE integration.**
           Not affiliated with or endorsed by Zed Industries.
 
           Zed **@UPSTREAM@** plus `crates/claude_code_ide`, built from `@COMMIT@`.
           Run the unmodified `claude` CLI in Zed's integrated terminal and it connects
           on its own — diagnostics, open-file and Keep/Reject diffs appear in the editor.
 
+          ### Codex integration (experimental)
+
+          This build includes the native Codex provider. Run the unmodified Codex
+          CLI in a local project opened in Zed, then use `/ide on` and `/ide status`.
+          The provider supplies the active file, open tabs and live selections,
+          including unsaved selected text. Zed's **codex: show status** action
+          reports provider registration and context requests.
+
+          Protocol compatibility was checked against Codex CLI **0.153.4**.
+          Live application acceptance testing is still pending on macOS, Windows
+          and Linux; successful builds do not establish runtime compatibility.
+          See [the implementation and testing notes](https://github.com/ixiion001/zed/blob/@TAG@/crates/claude_code_ide/CODEX.md).
+
           Everything that differs from official Zed, and nothing else:
           [v@UPSTREAM@ ... this build](https://github.com/zed-industries/zed/compare/v@UPSTREAM@...ixiion001:@TAG@).
-          One new crate, plus an 85-line graft into existing Zed code. The same
+          The integration lives in `crates/claude_code_ide`, with startup and terminal
+          wiring in existing Zed code. The same
           diff is attached as `zed-claude-code-@TAG@.diff.gz` -- `gunzip` it and
           `git apply` it to a checkout of upstream `v@UPSTREAM@` to rebuild this
           from source yourself.
@@ -439,7 +453,7 @@ jobs:
           # `create` fails if the release already exists, e.g. on a re-run; fall
           # back to replacing its assets rather than failing the job.
           gh release create "$TAG" --prerelease \
-            --title "Zed $upstream + Claude Code IDE (unofficial)" \
+            --title "Zed $upstream + Claude Code and Codex IDE (unofficial)" \
             --notes-file notes.md dist/* \
             || gh release upload "$TAG" dist/* --clobber
 

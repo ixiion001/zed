@@ -5,6 +5,16 @@ build of the fork against Zed 1.16.3. Every release is published as a prerelease
 `/releases/latest` excludes prereleases, so nothing updates itself to a build that has not been
 promoted.
 
+## cc-v1.18.1-2
+
+- Adds the native Codex IDE provider from `006511b1b4` to the existing Zed 1.18.1
+  release, retaining the upstream fixes included in `cc-v1.18.1-1`.
+- Codex CLI can request the active file, open tabs and live selections through
+  `/ide on`; Zed's **codex: show status** action reports the provider's state.
+- Codex support is experimental. Protocol and unit-test evidence is documented
+  in `crates/claude_code_ide/CODEX.md`; live native application testing remains
+  pending on macOS, Windows and Linux.
+
 ## cc-v1.18.0-1 — published 2026-09-04, promoted 2026-09-04
 
 Fifteen findings from a code review of the patch, several verified against the CLI binary

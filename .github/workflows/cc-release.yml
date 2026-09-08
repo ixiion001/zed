@@ -360,8 +360,13 @@ jobs:
           reports provider registration and context requests.
 
           Protocol compatibility was checked against Codex CLI **0.153.4**.
-          Live application acceptance testing is still pending on macOS, Windows
-          and Linux; successful builds do not establish runtime compatibility.
+          Live application acceptance testing has passed on macOS and Windows
+          (2026-09-08: Codex CLI `/ide` toggles, fresh selections with the
+          terminal focused including Unicode and multi-line text, file switching
+          and closing, nested workspace roots; on Windows both with the Codex
+          desktop app hosting the router and with Zed hosting the pipe). Linux is
+          still untested live; a successful build alone does not establish
+          runtime compatibility there.
           See [the implementation and testing notes](https://github.com/ixiion001/zed/blob/@TAG@/crates/claude_code_ide/CODEX.md).
 
           Everything that differs from official Zed, and nothing else:

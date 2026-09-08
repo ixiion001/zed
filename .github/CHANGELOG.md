@@ -12,8 +12,13 @@ promoted.
 - Codex CLI can request the active file, open tabs and live selections through
   `/ide on`; Zed's **codex: show status** action reports the provider's state.
 - Codex support is experimental. Protocol and unit-test evidence is documented
-  in `crates/claude_code_ide/CODEX.md`; live native application testing remains
-  pending on macOS, Windows and Linux.
+  in `crates/claude_code_ide/CODEX.md`.
+- Verified live on Windows on 2026-09-08 with the unmodified CLI 0.153.4: `/ide on` and
+  prompts returned the editor's selection both with the OpenAI Codex desktop app hosting
+  the router and with Zed creating the pipe and hosting it after the app had quit. The
+  Claude Code paths (diagnostics, selection push) were re-checked on the same build. Live
+  application testing on macOS and Linux is still pending; CODEX.md records the macOS
+  transport-level evidence.
 
 ## cc-v1.18.0-1 — published 2026-09-04, promoted 2026-09-04
 

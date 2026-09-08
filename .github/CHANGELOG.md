@@ -16,9 +16,12 @@ promoted.
 - Verified live on Windows on 2026-09-08 with the unmodified CLI 0.153.4: `/ide on` and
   prompts returned the editor's selection both with the OpenAI Codex desktop app hosting
   the router and with Zed creating the pipe and hosting it after the app had quit. The
-  Claude Code paths (diagnostics, selection push) were re-checked on the same build. Live
-  application testing on macOS and Linux is still pending; CODEX.md records the macOS
-  transport-level evidence.
+  Claude Code paths (diagnostics, selection push) were re-checked on the same build.
+- Verified live on macOS on 2026-09-08 with the same build: the unmodified Codex CLI's
+  `/ide on`, `/ide status` and `/ide off`, fresh selections with the terminal focused (Unicode,
+  multi-line, indentation), file switching and closing, and workspace context from a nested
+  directory all behaved as intended. Not yet exercised: multiple cursors and multi-window edge
+  cases. Linux remains untested live.
 - Rebased onto upstream `v1.18.1` (from `v1.18.0`, 6 upstream commits) by the auto-rebase job
   as `cc-v1.18.1-1`: zero conflicts, the graft is 43 added and 1 removed line over 5 files.
 

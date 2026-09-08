@@ -12,6 +12,34 @@ Zed's command palette action **codex: show status** reports provider registratio
 the last successfully answered context request, and the last error. Registration
 is not a count of terminals and does not mean `/ide` is enabled.
 
+## Checking selection context in a terminal
+
+Use `/ide status` in the Codex CLI session receiving your prompts to check whether
+automatic context is enabled. `/ide` without an argument toggles it; use explicit
+`/ide on` and `/ide off` commands when testing to avoid accidentally disabling it.
+
+`/ide off` stops attaching fresh editor context to subsequent prompts in that
+session. It does not shut down Zed's provider or erase selections already included
+in the conversation. Zed can still report its provider as available, and a direct
+IPC probe can still retrieve the current selection. A successful probe therefore
+does not prove that the CLI attached context to a prompt. An answer that repeats
+an earlier selection is also insufficient evidence of fresh context delivery.
+
+To check selection refresh and terminal focus:
+
+1. Run `/ide on`, then `/ide status`, and confirm that context is on.
+2. Select distinctive text in a saved, local file open in Zed.
+3. Focus the Codex terminal and ask: "What text have I selected? Answer only from
+   the IDE context attached to this message; do not use tools or earlier messages."
+4. Select different text, return to the terminal, and repeat the question. Confirm
+   that the answer contains the new selection.
+5. Run `/ide off`, select a third piece of text, and repeat the question. No fresh
+   selection should be attached; earlier context remains in the conversation.
+
+If fresh context is missing, check `/ide status` before investigating Zed's
+selection tracking. Re-enable context with `/ide on` before repeating the terminal
+focus check.
+
 ## Pinned protocol evidence
 
 - CLI **0.153.4**: [IPC client](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/tui/src/ide_context/ipc.rs),
@@ -137,7 +165,31 @@ Verified on the implementation host (macOS, 2026-09-05):
 - Standalone compilation of the actual transport/service/router modules for native
   Windows and Linux targets. Cross-compilation is not native runtime verification.
 
-Still required before a release claim on **each native platform**:
+Verified live on macOS (2026-09-08) with the published `cc-v1.18.1-2` build and the
+unmodified Codex CLI, following the procedure in "Checking selection context in a
+terminal" above:
+
+- `/ide on`, `/ide status` and `/ide off`, with real prompt submission.
+- Fresh selections arriving while the terminal had focus, including Unicode,
+  multi-line text and indentation.
+- Switching files updated the file name and selection; closing files removed them
+  from the open-tab context.
+- Live IPC returned the correct workspace context, including from a nested directory.
+- A fresh build succeeded and all 36 automated tests passed on the same machine.
+
+The one apparent stale-selection failure during that session occurred while IDE
+context was off, which is the trap the procedure above documents. Not explicitly
+confirmed by hand: that the Unicode example was an unsaved buffer (unsaved-buffer
+handling is covered by the automated tests), multiple cursors, and multi-window
+edge cases.
+
+Verified live on Windows (2026-09-08) with the same build and CLI 0.153.4: `/ide on`
+and prompts returned the editor's selection both with the OpenAI Codex desktop app
+hosting the router and with Zed creating the pipe and hosting it after the app had
+quit; the Claude Code diagnostics and selection push were re-checked on that build.
+
+Still required before a release claim on **Linux**, and not yet exercised on macOS or
+Windows where noted above:
 
 - Unmodified CLI `/ide on`, `/ide off`, `/ide status` and real prompt submission;
   fresh selections, unsaved edits, Unicode, multiple cursors and terminal focus.

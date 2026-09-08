@@ -188,6 +188,13 @@ and prompts returned the editor's selection both with the OpenAI Codex desktop a
 hosting the router and with Zed creating the pipe and hosting it after the app had
 quit; the Claude Code diagnostics and selection push were re-checked on that build.
 
+The Claude Code paths were verified live on macOS (2026-09-08) with the same build and
+the unmodified `claude` CLI: auto-connect from the integrated terminal, the selection
+push, `getDiagnostics` returning both basedpyright and Ruff findings, the CLI's
+post-edit diagnostics, the `cmd-alt-k` mention from the editor and from the terminal,
+the toast with no editor open, and every diff outcome (Keep, Reject, tab closed, Esc).
+Not run there: the lock-file refresh on Add Folder and the second-window port check.
+
 Still required before a release claim on **Linux**, and not yet exercised on macOS or
 Windows where noted above:
 
@@ -199,9 +206,11 @@ Windows where noted above:
   endpoint), and router-owner exit with the complete official apps.
 - Native Windows pipe DACL/ownership and Linux peer credentials under different
   users; Windows and Linux runtime execution of the tests.
-- Live Claude connection/selection notifications and Keep/Reject diff review.
+- Live Claude connection/selection notifications and Keep/Reject diff review on
+  Linux; on macOS and Windows these passed as recorded above.
 
-No updated Zed application was launched or published during this verification.
+No updated Zed application was launched or published during the 2026-09-05
+verification; the 2026-09-08 checks ran against the published `cc-v1.18.1-2` build.
 
 ## Follow-up audit
 

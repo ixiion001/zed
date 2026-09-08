@@ -122,7 +122,7 @@ git remote add zed https://github.com/zed-industries/zed
 git fetch zed tag v1.18.1
 git diff --shortstat v1.18.1..main-patched -- \
   crates/project/ crates/zed/src/main.rs crates/zed/Cargo.toml Cargo.toml
-#   5 files changed, 85 insertions(+)
+#   5 files changed, 43 insertions(+), 1 deletion(-)
 ```
 
 `script/claude-ide-probe.py` checks a running editor end to end — lock file, handshake, MCP,

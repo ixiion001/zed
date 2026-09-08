@@ -17,6 +17,12 @@ promoted.
   prompts returned the editor's selection both with the OpenAI Codex desktop app hosting
   the router and with Zed creating the pipe and hosting it after the app had quit. The
   Claude Code paths (diagnostics, selection push) were re-checked on the same build.
+- The Claude Code paths were verified live on macOS on 2026-09-08 with the same build and
+  the unmodified `claude` CLI: auto-connect from the integrated terminal, the selection
+  push, `getDiagnostics` returning both basedpyright and Ruff findings, the CLI's post-edit
+  diagnostics, the `cmd-alt-k` mention from the editor and from the terminal, the toast with no
+  editor open, and every diff outcome (Keep, Reject, tab closed, Esc). Not run there: the
+  lock-file refresh on Add Folder and the second-window port check.
 - Verified live on macOS on 2026-09-08 with the same build: the unmodified Codex CLI's
   `/ide on`, `/ide status` and `/ide off`, fresh selections with the terminal focused (Unicode,
   multi-line, indentation), file switching and closing, and workspace context from a nested

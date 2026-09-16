@@ -9,7 +9,7 @@
 //! own save.
 
 use crate::server::{ProtocolError, error_codes};
-use buffer_diff::{BufferDiff, DiffBaseKind};
+use buffer_diff::BufferDiff;
 use collections::HashMap;
 use editor::{DiffViewStyle, MultiBuffer, SelectionEffects, SplittableEditor, scroll::Autoscroll};
 use futures::channel::oneshot;
@@ -103,17 +103,11 @@ pub async fn open_diff(
             let language = buffer.read(cx).language().cloned();
             let language_registry = buffer.read(cx).language_registry();
             let snapshot = buffer.read(cx).text_snapshot();
-            // `Custom` because the base is caller-provided text (the file as it
-            // is on disk) rather than anything from git.
-            let diff = cx.new(|cx| {
-                BufferDiff::new(
-                    &snapshot,
-                    language,
-                    language_registry,
-                    DiffBaseKind::Custom,
-                    cx,
-                )
-            });
+            // No `DiffOperations` are attached: the base is caller-provided text (the
+            // file as it is on disk) rather than anything from git, so a hunk has
+            // nothing to be staged or restored against. This is what the removed
+            // `DiffBaseKind::Custom` argument used to say.
+            let diff = cx.new(|cx| BufferDiff::new(&snapshot, language, language_registry, cx));
             let base_ready = diff.update(cx, |diff, cx| {
                 diff.set_base_text(Some(old_contents.into()), snapshot, cx)
             });

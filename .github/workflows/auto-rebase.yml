@@ -35,14 +35,27 @@ name: auto-rebase
 
 on:
   schedule:
-    # Tuesdays 05:37 UTC. Zed's releases land midweek, so early in the week
-    # still picks up the previous release after a few days of other people
-    # finding its bugs. The odd slot is deliberate: GitHub's cron scheduler is
-    # most congested at minute 0 of a round hour on Monday mornings, when
-    # everyone's weekly job fires -- delayed runs are common there and a
-    # dropped slot is possible. A missed slot is never backfilled; it simply
-    # waits a week, which costs nothing here but is worth avoiding for free.
-    - cron: "37 5 * * 2"
+    # Mondays 12:19 UTC. The slot is chosen so the *release* -- not this job --
+    # is downloadable by 09:00 Manila (01:00 UTC) Tuesday, which is when the
+    # maintainer installs it. Work backwards along the chain: this job sits in
+    # GitHub's scheduler queue, runs ~11 min, tags, and cc-release then takes
+    # 3-4 h with the macOS leg as the long pole.
+    #
+    # The queue wait is the term that dominates, and it cannot be tuned away.
+    # Measured 2026-09-22 across every cron in this fork -- upstream's inherited
+    # ones skip on a fork guard, but their dispatch timestamps are real -- a
+    # `schedule` event is held **2h11m to 6h47m**. A fork on the free tier sits
+    # in a low-priority scheduling tier; the delay is not congestion at a
+    # particular minute, and the same `0 16` slot produced both 1h52m and 4h08m.
+    # So pick the slot to make the *whole* spread land before the deadline
+    # rather than to shorten it: best case publishes 17:40 UTC Mon (01:40
+    # Manila), worst 23:20 UTC Mon (07:20 Manila). Both beat 09:00.
+    #
+    # Zed ships midweek, so a Monday slot still lets a release settle for
+    # several days before we rebase onto it. The odd minute stays free
+    # insurance: minute 0 of a round hour is the most congested slot, and a
+    # dropped slot is never backfilled -- it simply waits a week.
+    - cron: "19 12 * * 1"
   workflow_dispatch:
     inputs:
       target_tag:

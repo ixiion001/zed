@@ -9,6 +9,7 @@ use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
 use editor::Editor;
 use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     ops::Range,
@@ -170,15 +171,15 @@ impl WorkspaceDispatcher {
                         .map(|entry| {
                             let start = snapshot.point_to_point_utf16(entry.range.start);
                             let end = snapshot.point_to_point_utf16(entry.range.end);
-                            json!({
-                                "message": entry.diagnostic.message,
-                                "severity": severity_name(entry.diagnostic.severity),
-                                "range": {
+                            WireDiagnostic {
+                                message: entry.diagnostic.message.as_str(),
+                                severity: severity_name(entry.diagnostic.severity),
+                                range: json!({
                                     "start": { "line": start.row, "character": start.column },
                                     "end": { "line": end.row, "character": end.column },
-                                },
-                                "source": entry.diagnostic.source,
-                            })
+                                }),
+                                source: entry.diagnostic.source.as_deref(),
+                            }
                         })
                         .collect::<Vec<_>>();
                     // The CLI compares this `uri` with the one it sent, without
@@ -461,6 +462,21 @@ fn required_string_field(arguments: &Value, field: &str) -> Result<String, Proto
 }
 
 /// Maps Zed/LSP diagnostic severities to the names the CLI's validator accepts.
+/// One diagnostic in a `getDiagnostics` reply.
+///
+/// Typed rather than built with `json!`, which accepts any `Serialize` and so
+/// passes an upstream type change straight onto the wire: Zed 1.21 made
+/// `Diagnostic::message` a struct that serializes as an object, which compiled
+/// cleanly and left the CLI with no message text. With `&str` fields the next
+/// such change fails to compile instead.
+#[derive(Serialize)]
+struct WireDiagnostic<'a> {
+    message: &'a str,
+    severity: &'static str,
+    range: Value,
+    source: Option<&'a str>,
+}
+
 fn severity_name(severity: DiagnosticSeverity) -> &'static str {
     match severity {
         DiagnosticSeverity::ERROR => "Error",
@@ -756,5 +772,32 @@ mod tests {
         assert!(starts_with_drive_letter("z:"));
         assert!(!starts_with_drive_letter("/home"));
         assert!(!starts_with_drive_letter("1:/nope"));
+    }
+
+    #[test]
+    fn wire_diagnostic_is_the_shape_the_cli_reads() {
+        // The CLI renders `message` as text and matches `severity` by name, so
+        // both must be plain strings under exactly these keys.
+        let diagnostic = WireDiagnostic {
+            message: "\"int\" is not defined",
+            severity: severity_name(DiagnosticSeverity::ERROR),
+            range: json!({
+                "start": { "line": 0, "character": 16 },
+                "end": { "line": 0, "character": 19 },
+            }),
+            source: Some("basedpyright"),
+        };
+        assert_eq!(
+            json!(diagnostic),
+            json!({
+                "message": "\"int\" is not defined",
+                "severity": "Error",
+                "range": {
+                    "start": { "line": 0, "character": 16 },
+                    "end": { "line": 0, "character": 19 },
+                },
+                "source": "basedpyright",
+            })
+        );
     }
 }

@@ -41,7 +41,7 @@ workspace.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Security_Authorization"] }
+windows = { workspace = true, features = ["Win32_Security_Authorization", "Win32_System_Pipes"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

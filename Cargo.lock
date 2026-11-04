@@ -3045,7 +3045,7 @@ dependencies = [
  "buffer_diff",
  "collections",
  "editor",
- "futures 0.3.32",
+ "futures 0.3.34",
  "gpui",
  "gpui_tokio",
  "language",
@@ -3062,7 +3062,7 @@ dependencies = [
  "ui",
  "util",
  "uuid",
- "windows 0.61.3",
+ "windows 0.62.2",
  "workspace",
 ]
 

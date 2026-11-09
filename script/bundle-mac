@@ -275,7 +275,13 @@ function sign_app_binaries() {
 
         echo "Adding license agreement to DMG"
         npm install --global dmg-license minimist
-        dmg-license script/terms/terms.json "${dmg_file_path}"
+        # Retry: diskimages-helper from `hdiutil create` can still hold the DMG, making udifrez fail with EAGAIN.
+        for attempt in 1 2 3 4 5; do
+            dmg-license script/terms/terms.json "${dmg_file_path}" && break
+            [[ $attempt -lt 5 ]] || exit 1
+            echo "dmg-license failed (attempt ${attempt}/5), retrying in 5s"
+            sleep 5
+        done
 
         if [[ $can_code_sign = true ]]; then
             echo "Notarizing DMG with Apple"

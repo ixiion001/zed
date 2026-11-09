@@ -1,0 +1,22 @@
+# Probe target for the weekly Actions check in the private ixiion001/zed-fork-watch repo.
+#
+# GitHub's usage mitigation can switch Actions off on forks in a busy fork
+# network (support ticket #4903811) while the settings API keeps reporting
+# `enabled: true`. The reliable signal is a workflow_dispatch: GitHub answers it
+# with HTTP 422 "Actions has been disabled for this repository" while the flag
+# is set. The watch repo dispatches this workflow 24 h before auto-rebase runs;
+# only the dispatch being accepted matters, so the job itself does nothing.
+#
+# Keep this workflow enabled when disabling upstream's workflows in the fork.
+name: heartbeat
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Actions is enabled"

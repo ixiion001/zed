@@ -290,10 +290,14 @@ jobs:
     runs-on: ubuntu-latest
     # The repository default for GITHUB_TOKEN is read-only; creating a release
     # needs write. Naming any scope here sets every unnamed one to `none`, hence
-    # the explicit `actions: read` for reading this run's artifacts.
+    # the explicit `actions: read` for reading this run's artifacts. The last
+    # three are what actions/attest needs to sign and store build provenance.
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -304,6 +308,17 @@ jobs:
       # are about to publish against the bytes we are about to publish.
       - name: Verify checksums
         run: cd dist && sha256sum -c ./*.sha256
+
+      # Signed provenance: proves each binary came from this workflow at this
+      # commit, checkable with `gh attestation verify`. The fork has no other
+      # signing -- the binaries themselves are unsigned.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.dmg
 
       # Always a prerelease, never conditionally. `/releases/latest` excludes
       # prereleases, so this one flag is what stops a machine updating itself to
@@ -428,6 +443,14 @@ jobs:
           sha256sum -c <asset>.sha256
           ```
 
+          Each binary also carries a signed build-provenance attestation, which
+          proves it was built by this repository's release workflow from the
+          commit above:
+
+          ```
+          gh attestation verify <asset> --repo ixiion001/zed
+          ```
+
           These binaries are **unsigned**. The source is this repository at the commit
           above, and can be rebuilt from it.
 
@@ -450,7 +473,9 @@ jobs:
 
           [Zed Industries](https://github.com/zed-industries/zed) for the editor, and
           [vitaly-andr](https://github.com/vitaly-andr/zed) for `crates/claude_code_ide`.
-          GPL-3; corresponding source is this repository.
+          GPL-3.0-or-later, as Zed is (GPUI: Apache-2.0); corresponding source is
+          this repository at the commit above. "Zed" names the upstream editor
+          only; this build is not a Zed Industries product.
           NOTES
 
           sed -i "s|@UPSTREAM@|$upstream|g; s|@COMMIT@|$GITHUB_SHA|g; s|@TAG@|$TAG|g" notes.md

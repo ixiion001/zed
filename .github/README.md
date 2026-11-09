@@ -1,16 +1,24 @@
-# Zed + Claude Code
+# Zed + Claude Code (unofficial)
 
-**An unofficial build of [Zed](https://zed.dev) with native Claude Code IDE integration.**
+> [!IMPORTANT]
+> **Unofficial.** Not affiliated with, endorsed by, or supported by Zed Industries. This is a
+> personal fork; "Zed" here names the upstream editor it is built from, nothing more. For
+> official Zed, go to [zed.dev](https://zed.dev) or
+> [zed-industries/zed](https://github.com/zed-industries/zed). Please report problems with this
+> build [here](../../issues), never to Zed.
+
+**An unofficial build of [Zed](https://zed.dev) with native Claude Code IDE integration**, plus an
+experimental native Codex integration.
 Run the real `claude` CLI in Zed's integrated terminal and it connects on its own — your selection,
 diagnostics and Keep/Reject diffs appear in the editor.
 Prebuilt for Windows, macOS and Linux.
-Zed's own code is barely touched: the integration is a self-contained crate plus an
-**43-line graft**, which is what lets this build follow upstream Zed rather than drift away
-from it.
 
-> Not affiliated with, endorsed by, or supported by Zed Industries. This is a personal fork.
-> For official Zed, go to [zed.dev](https://zed.dev) or
-> [zed-industries/zed](https://github.com/zed-industries/zed).
+**Based on:** upstream Zed [`v1.21.0`](https://github.com/zed-industries/zed/releases/tag/v1.21.0)
+on `main-patched`; each release names its own base tag in its title and the
+[changelog](CHANGELOG.md).
+**What changes:** one new crate, `crates/claude_code_ide/`, plus a **43-line graft** into existing
+Zed code — [every line of it](#how-it-works). That small footprint is what lets this build follow
+upstream Zed rather than drift away from it.
 
 ## What it does
 
@@ -28,8 +36,18 @@ and JetBrains extensions speak.
 
 Download from [Releases](../../releases) — the [changelog](CHANGELOG.md) says what each one is
 built on and what has been verified. Every release ships a `.sha256` beside each asset; verify
-with `sha256sum -c <asset>.sha256` (`shasum -a 256 -c` on macOS). The binaries are **unsigned** — the
-source is this repository at the commit named in the release, and can be rebuilt from it.
+with `sha256sum -c <asset>.sha256` (`shasum -a 256 -c` on macOS). Newer releases also carry a
+signed build-provenance attestation, which proves an asset was built by this repository's release
+workflow from the tagged commit:
+
+```sh
+gh attestation verify <asset> --repo ixiion001/zed
+```
+
+Releases up to and including `cc-v1.26.2-2` predate this and have no attestation.
+
+The binaries are **unsigned** — the source is this repository at the commit named in the release,
+and can be rebuilt from it.
 
 **Windows** — unzip into `%LOCALAPPDATA%\Programs\ZedDev` and run `zed.exe` from there.
 `conpty.dll` and `OpenConsole.exe` must sit beside it or the integrated terminal will not open.
@@ -147,4 +165,15 @@ easiest way to end up with a binary that quietly replaces itself.
 - This fork — Windows discovery, handshake and path fixes (offered back upstream), and the
   cross-platform release pipeline.
 
-GPL-3.0-or-later, as Zed is. The corresponding source is this repository, which stays public.
+Licensed as upstream Zed is: **GPL-3.0-or-later** ([`LICENSE-GPL`](../LICENSE-GPL)) for the
+editor and `crates/claude_code_ide`, and **Apache-2.0** ([`LICENSE-APACHE`](../LICENSE-APACHE))
+for GPUI and the other crates upstream licenses that way. Each crate's `Cargo.toml` names its
+licence. All upstream copyright notices are kept.
+
+This is a modified version of Zed. The modifications are the commits on `main-patched` after the
+upstream base tag, listed in full by the [compare view above](#how-it-works) and attached as a
+diff to every release. The corresponding source for each release is this repository at that
+release's tag, which stays public.
+
+"Zed" is the name of Zed Industries' editor. It is used here only to say what this build is
+derived from; this project is not a Zed Industries product.

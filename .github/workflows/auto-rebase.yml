@@ -63,11 +63,13 @@ on:
         required: false
         default: ""
 
-# Naming any scope sets the rest to none, so both are explicit: `contents` to
-# push the auto branch, `issues` to report what happened.
+# Naming any scope sets the rest to none, so all are explicit: `contents` to
+# push the auto branch, `issues` to report what happened, `actions` to disable
+# upstream workflows (last step).
 permissions:
   contents: write
   issues: write
+  actions: write
 
 # A rebase plus a full crate build runs over an hour. Two racing would fight over
 # the same auto branch for no benefit.
@@ -469,3 +471,29 @@ jobs:
           url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
+
+      # Upstream's workflows are disabled in this fork: they skip on their
+      # `repository_owner == 'zed-industries'` guards or need PRs, so they did no
+      # work here, yet their schedules filled the run list -- the suspected
+      # trigger of GitHub's fork usage flag (support ticket #4903811). A disabled
+      # workflow stays disabled across rebases, but one upstream *adds* arrives
+      # active once a push registers it. Runs every week, rebase or not, so a
+      # workflow registered later (e.g. by adopting onto main-patched) is caught
+      # by the next run. Non-fatal: tidiness must never fail the job.
+      - name: Disable upstream workflows
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.state == "active")
+                  | select(.path | startswith(".github/workflows/"))
+                  | select(.path | test("/(auto-rebase|cc-release|claude-code-ide|heartbeat)\\.yml$") | not)
+                  | "\(.id) \(.path)"' |
+          while read -r workflow_id workflow_path; do
+            if gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/disable" >/dev/null; then
+              echo "disabled $workflow_path"
+            else
+              echo "::warning::could not disable $workflow_path"
+            fi
+          done

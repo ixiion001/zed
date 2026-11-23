@@ -96,6 +96,11 @@ env:
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: 1
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # The job adds an `upstream` remote, and from then on `gh` takes a remote of
+  # that name to be the repository it works on: `gh run list` asked
+  # zed-industries/zed for cc-release.yml, and every "is this issue already
+  # open?" search had been looking there too. Pinned for the whole job.
+  GH_REPO: ${{ github.repository }}
   # A release that keeps failing is a defect, not bad luck. After this many tags
   # for one upstream version without a release, stop and ask.
   MAX_RELEASE_ATTEMPTS: "3"

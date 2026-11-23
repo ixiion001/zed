@@ -301,7 +301,7 @@ fn dispatch(
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use futures::StreamExt;
@@ -327,16 +327,21 @@ mod tests {
         .await
         .unwrap();
     }
+    // Replacing an endpoint under a live router is a pathname hazard; a named
+    // pipe cannot be unlinked, so these two have no Windows counterpart.
+    #[cfg(unix)]
     #[tokio::test]
     async fn rejoins_router_when_socket_path_is_replaced() {
         replaced_socket(true).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rejoins_when_external_router_is_still_alive_but_unlinked() {
         replaced_socket(false).await;
     }
 
+    #[cfg(unix)]
     async fn replaced_socket(zed_owned: bool) {
         let home = std::env::temp_dir().join(format!(
             "zr-{}",
@@ -474,6 +479,8 @@ mod tests {
         foreground_task.abort();
         let _ = foreground_task.await;
         tokio::task::yield_now().await;
+        // A pipe leaves nothing on disk; the home only ever named it.
+        #[cfg(unix)]
         std::fs::remove_dir_all(home).unwrap();
     }
 }

@@ -93,7 +93,19 @@ impl Listener {
     }
     pub async fn accept(&mut self) -> Result<Stream> {
         self.next.connect().await?;
-        let connected = std::mem::replace(&mut self.next, create(false, &self.path)?);
+        let replacement = match create(false, &self.path) {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                // `next` has to go back to listening. Left connected, every
+                // later accept would return at once and fail here again, and
+                // this client would hold the only instance without being served.
+                if let Err(error) = self.next.disconnect() {
+                    log::warn!("Codex IPC: cannot reset the pipe instance: {error}");
+                }
+                return Err(error);
+            }
+        };
+        let connected = std::mem::replace(&mut self.next, replacement);
         let mut pid = 0;
         unsafe {
             GetNamedPipeClientProcessId(HANDLE(connected.as_raw_handle()), &mut pid)?;
@@ -102,8 +114,16 @@ impl Listener {
         Ok(Stream::Server(connected))
     }
 }
+#[cfg(not(test))]
 pub fn endpoint(_home: &Path) -> PathBuf {
     PathBuf::from(r"\\.\pipe\codex-ipc")
+}
+// Tests must never meet the user's real router, so each test home gets a pipe
+// of its own.
+#[cfg(test)]
+pub fn endpoint(home: &Path) -> PathBuf {
+    let name = home.file_name().unwrap_or_default().to_string_lossy();
+    PathBuf::from(format!(r"\\.\pipe\zed-codex-test-{name}"))
 }
 fn user_token(process: HANDLE) -> Result<Vec<usize>> {
     let mut token = HANDLE::default();
@@ -234,7 +254,19 @@ mod tests {
         drop(client);
         drop(server);
         drop(owner);
-        let (restarted, _, _) = connect_or_bind_path(&path).await.unwrap();
+        // A dropped pipe keeps its handle until the reactor has seen its
+        // cancelled I/O complete, and while any instance exists the
+        // first-instance flag is refused with "Access is denied". The service
+        // retries every second; the test has to give the reactor a turn too.
+        let mut restarted = connect_or_bind_path(&path).await;
+        for _ in 0..200 {
+            if restarted.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            restarted = connect_or_bind_path(&path).await;
+        }
+        let (restarted, _, _) = restarted.unwrap();
         assert!(restarted.is_some());
     }
 }

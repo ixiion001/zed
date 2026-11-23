@@ -66,7 +66,7 @@ Entry point: `claude_code_ide::init(cx)`, called from `crates/zed/src/main.rs`.
 | `getCurrentSelection` / `getLatestSelection` | Active editor selection (for `@`-mentions). |
 | `getWorkspaceFolders` | Visible worktree roots. |
 | `getOpenEditors` | Open buffers with uri/label/language/dirty state. |
-| `getDiagnostics` | Language diagnostics, all buffers or one uri. |
+| `getDiagnostics` | Language diagnostics for one uri, or for every open buffer plus up to 50 files that are not open but known to have some. |
 | `openFile` | Open a path, optionally selecting a line range. |
 | `saveDocument` / `checkDocumentDirty` | Save a buffer / query its dirty state. |
 | `openDiff` | Blocking side-by-side diff with Keep/Reject. |

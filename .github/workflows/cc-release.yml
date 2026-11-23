@@ -109,9 +109,13 @@ jobs:
             }
             $url = $match.Matches[0].Groups[1].Value
             Write-Output "::warning::the build script left no conpty.dll or OpenConsole.exe; fetching $url"
-            Invoke-WebRequest -Uri $url -OutFile conpty.nupkg.zip -MaximumRetryCount 3 -RetryIntervalSec 15
-            Expand-Archive -Path conpty.nupkg.zip -DestinationPath conpty -Force
-            Copy-Item "conpty/runtimes/win-x64/native/conpty.dll","conpty/build/native/runtimes/x64/OpenConsole.exe" "$rel/"
+            # Outside the workspace: the upload step takes every *.zip in it,
+            # and cc-v1.29.3-2 shipped this package as a release asset.
+            $package = Join-Path $env:RUNNER_TEMP "conpty.nupkg.zip"
+            $unpacked = Join-Path $env:RUNNER_TEMP "conpty"
+            Invoke-WebRequest -Uri $url -OutFile $package -MaximumRetryCount 3 -RetryIntervalSec 15
+            Expand-Archive -Path $package -DestinationPath $unpacked -Force
+            Copy-Item "$unpacked/runtimes/win-x64/native/conpty.dll","$unpacked/build/native/runtimes/x64/OpenConsole.exe" "$rel/"
           }
           New-Item -ItemType Directory -Force -Path staging | Out-Null
           Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/

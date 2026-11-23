@@ -340,6 +340,9 @@ impl ClaudeCodeIdeServer {
         editor: &Entity<Editor>,
         cx: &mut App,
     ) -> Result<(), &'static str> {
+        // A CLI that has exited is otherwise only noticed by the next broadcast,
+        // and until then the shortcut would report a mention nobody received.
+        self.connections.retain(|connection| !connection.is_closed());
         if self.connections.is_empty() {
             return Err("no CLI session is connected to this window");
         }

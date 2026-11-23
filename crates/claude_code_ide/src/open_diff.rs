@@ -117,7 +117,14 @@ pub async fn open_diff(
 
     base_ready.await;
 
-    let notification_id = NotificationId::composite::<ClaudeDiffNotification>(tab_name.clone());
+    // Keyed by this request's buffer, not by `tab_name`: showing a notification
+    // dismisses any other with its id, and the request a repeated `tab_name`
+    // replaces dismisses its own on the way out, which with a shared id would
+    // take the newer request's Keep and Reject with it.
+    let notification_id = NotificationId::composite::<ClaudeDiffNotification>((
+        "claude-diff",
+        buffer.entity_id(),
+    ));
     let weak_pending = Rc::downgrade(pending);
     let editor_id = window
         .update(cx, |_root, window, cx| {

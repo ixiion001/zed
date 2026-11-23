@@ -7,11 +7,14 @@ use crate::editor_context::{bounded_text, local_abs_path, utf16_range};
 use crate::open_diff::{PendingDiffs, open_diff};
 use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
 use editor::Editor;
+use futures::future::join_all;
 use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
+use project::ProjectPath;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -146,9 +149,41 @@ impl WorkspaceDispatcher {
     /// with one entry per file. The CLI reads only the first text block, expects
     /// 0-based positions with UTF-16 columns (as VS Code defines them), and
     /// drops any diagnostic whose severity is not one of the four names.
-    fn get_diagnostics(&self, arguments: &Value, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
+    async fn get_diagnostics(
+        &self,
+        arguments: &Value,
+        cx: &mut AsyncApp,
+    ) -> Result<Value, ProtocolError> {
         let requested_uri = arguments.get("uri").and_then(Value::as_str).map(str::to_owned);
         let target = requested_uri.as_deref().map(path_from_uri);
+
+        // Zed keeps a file's diagnostics in its buffer. For a file nobody has
+        // open it remembers them aside and hands them over when the buffer is
+        // loaded, so load -- without a tab -- the file asked for, or else the
+        // files known to have any. A file the CLI has just edited is often not
+        // open here, and it would otherwise always look clean.
+        let loading = self
+            .workspace
+            .update(cx, |workspace, cx| {
+                workspace.project().update(cx, |project, cx| {
+                    let paths: BTreeSet<ProjectPath> = match &target {
+                        Some(target) => project.find_project_path(target, cx).into_iter().collect(),
+                        None => project
+                            .diagnostic_summaries(false, cx)
+                            .map(|(path, _, _)| path)
+                            .collect(),
+                    };
+                    paths
+                        .into_iter()
+                        .take(UNOPENED_DIAGNOSTIC_FILES_LIMIT)
+                        .map(|path| project.open_buffer(path, cx))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .map_err(|error| ProtocolError::internal(error.to_string()))?;
+        // Held until the reply is built, then released again. A file that no
+        // longer loads has nothing to report and is not an error of this call.
+        let loaded = join_all(loading).await;
 
         let files = self
             .workspace
@@ -191,6 +226,7 @@ impl WorkspaceDispatcher {
                 files
             })
             .map_err(|error| ProtocolError::internal(error.to_string()))?;
+        drop(loaded);
 
         Ok(mcp_text(Value::Array(files)))
     }
@@ -294,6 +330,12 @@ impl WorkspaceDispatcher {
         Ok(mcp_text(json!({ "success": true, "filePath": path })))
     }
 }
+
+/// How many files that are not open `getDiagnostics` loads to read their
+/// diagnostics when it is asked about the whole workspace. Each is read from
+/// disk for the reply, so a project with errors everywhere must not turn one
+/// question into thousands of file loads.
+const UNOPENED_DIAGNOSTIC_FILES_LIMIT: usize = 50;
 
 /// Selected text beyond this many bytes is cut short, with a note saying so.
 /// The CLI repeats the selection into the model's context with every prompt
@@ -625,7 +667,7 @@ impl Dispatcher for WorkspaceDispatcher {
             "getLatestSelection" => self.get_current_selection(&mut cx),
             "getWorkspaceFolders" => self.get_workspace_folders(&mut cx),
             "getOpenEditors" => self.get_open_editors(&mut cx),
-            "getDiagnostics" => self.get_diagnostics(&arguments, &mut cx),
+            "getDiagnostics" => self.get_diagnostics(&arguments, &mut cx).await,
             "checkDocumentDirty" => self.check_document_dirty(&arguments, &mut cx),
             "openFile" => self.open_file(arguments, &mut cx).await,
             "saveDocument" => self.save_document(arguments, &mut cx).await,

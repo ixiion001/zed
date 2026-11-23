@@ -54,36 +54,71 @@ pub fn init(cx: &mut App) {
     cx.observe_new({
         let registry = registry.clone();
         move |workspace: &mut Workspace, _, cx: &mut gpui::Context<Workspace>| {
-            if !workspace.project().read(cx).is_local() { return; }
+            if !workspace.project().read(cx).is_local() {
+                return;
+            }
             let id = cx.entity_id();
             let subscription = cx.subscribe(&cx.entity(), {
                 let registry = registry.clone();
                 move |workspace, _, event, cx| {
-                    if matches!(event, workspace::Event::ActiveItemChanged) {
-                        if let Some(editor) = workspace.active_item_as::<Editor>(cx) {
-                            if editor_path(&editor, cx).is_some() {
-                                if let Some(entry) = registry.borrow_mut().iter_mut().find(|entry| entry.id == id) {
-                                    entry.last_editor = Some(editor.downgrade());
-                                }
-                            }
-                        }
+                    if !matches!(event, workspace::Event::ActiveItemChanged) {
+                        return;
+                    }
+                    let Some(editor) = workspace.active_item_as::<Editor>(cx) else {
+                        return;
+                    };
+                    if editor_path(&editor, cx).is_none() {
+                        return;
+                    }
+                    if let Some(entry) = registry
+                        .borrow_mut()
+                        .iter_mut()
+                        .find(|entry| entry.id == id)
+                    {
+                        entry.last_editor = Some(editor.downgrade());
                     }
                 }
             });
-            registry.borrow_mut().push(WindowContext { id, workspace: cx.entity().downgrade(), last_editor: None, _subscription: subscription });
+            registry.borrow_mut().push(WindowContext {
+                id,
+                workspace: cx.entity().downgrade(),
+                last_editor: None,
+                _subscription: subscription,
+            });
             workspace.register_action(|workspace, _: &ShowStatus, _, cx| {
                 let state = cx.global::<CodexIdeStatus>();
-                let availability = if state.available { "available" } else { "unavailable" };
-                let last = state.last_successful_request.and_then(|time| time.elapsed().ok())
+                let availability = if state.available {
+                    "available"
+                } else {
+                    "unavailable"
+                };
+                let last = state
+                    .last_successful_request
+                    .and_then(|time| time.elapsed().ok())
                     .map(|elapsed| format!("Last successful request {}s ago.", elapsed.as_secs()))
                     .unwrap_or_else(|| "No successful context request yet.".into());
-                let error = state.last_error.as_deref().map(|e| format!(" {e}")).unwrap_or_default();
-                let message = format!("Codex IDE provider {availability}. {last}{error} Use /ide status in Codex to check whether context is enabled.");
-                workspace.show_toast(Toast::new(NotificationId::named("codex-ide-status".into()), message), cx);
+                let error = state
+                    .last_error
+                    .as_deref()
+                    .map(|error| format!(" {error}"))
+                    .unwrap_or_default();
+                let message = format!(
+                    "Codex IDE provider {availability}. {last}{error} \
+                     Use /ide status in Codex to check whether context is enabled."
+                );
+                let toast = NotificationId::named("codex-ide-status".into());
+                workspace.show_toast(Toast::new(toast, message), cx);
             });
-            cx.on_release({ let registry = registry.clone(); move |_, _| { registry.borrow_mut().retain(|entry| entry.id != id); } }).detach();
+            cx.on_release({
+                let registry = registry.clone();
+                move |_, _| {
+                    registry.borrow_mut().retain(|entry| entry.id != id);
+                }
+            })
+            .detach();
         }
-    }).detach();
+    })
+    .detach();
     let (events, mut incoming) = futures::channel::mpsc::unbounded();
     let home = std::env::var_os("CODEX_HOME")
         .filter(|home| !home.is_empty())
@@ -123,7 +158,9 @@ pub fn init(cx: &mut App) {
                         },
                         Err(error) => Err(error),
                     };
-                    let _ = reply.send(result.map_err(str::to_owned));
+                    // The transport gives up on a query after its own deadline;
+                    // an answer that arrives later has no one to go to.
+                    reply.send(result.map_err(str::to_owned)).ok();
                 }
                 service::Event::Status {
                     available,

@@ -169,6 +169,7 @@ async fn session(home: &std::path::Path, events: &Events, owned: &OwnedEndpoint)
     }
     #[cfg(windows)]
     {
+        // A pipe has no pathname another router could replace under us.
         let _ = endpoint;
         provider.await
     }
@@ -220,7 +221,9 @@ async fn connection(
         anyhow::Ok(())
     };
     tokio::select! { _ = read => {}, _ = write => {} }
-    let _ = events.send(SocketEvent::Closed(peer)).await;
+    // The router going away first is the only way this fails, and then there
+    // is nobody left to tell.
+    events.send(SocketEvent::Closed(peer)).await.ok();
 }
 async fn serve_router(mut listener: platform::Listener) -> Result<()> {
     let mut router = Router::default();

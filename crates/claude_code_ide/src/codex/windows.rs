@@ -107,6 +107,8 @@ impl Listener {
         };
         let connected = std::mem::replace(&mut self.next, replacement);
         let mut pid = 0;
+        // SAFETY: `connected` owns the handle for the whole call and `pid` is a
+        // live out-parameter.
         unsafe {
             GetNamedPipeClientProcessId(HANDLE(connected.as_raw_handle()), &mut pid)?;
         }
@@ -127,19 +129,29 @@ pub fn endpoint(home: &Path) -> PathBuf {
 }
 fn user_token(process: HANDLE) -> Result<Vec<usize>> {
     let mut token = HANDLE::default();
+    // SAFETY: the caller's `process` handle is open, and `token` is a live
+    // out-parameter.
     unsafe {
         OpenProcessToken(process, TOKEN_QUERY, &mut token)?;
     }
-    let token = unsafe { OwnedHandle::from_raw_handle(token.0) };
-    let token = HANDLE(token.as_raw_handle());
+    // SAFETY: the call above succeeded, so `token` is a handle nobody else
+    // owns; wrapping it closes it when this function returns.
+    let owned_token = unsafe { OwnedHandle::from_raw_handle(token.0) };
+    let token = HANDLE(owned_token.as_raw_handle());
     let mut size = 0;
+    // SAFETY: a null buffer of length zero is the documented way to ask for
+    // the size. The call is expected to fail with "insufficient buffer", so
+    // its result says nothing; `size` staying zero is the failure.
     unsafe {
-        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut size);
+        GetTokenInformation(token, TokenUser, None, 0, &mut size).ok();
     }
     if size == 0 {
         bail!("cannot read IPC process owner");
     }
+    // `usize` elements, so the buffer is aligned for the `TOKEN_USER` that
+    // callers read out of it.
     let mut bytes = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: `bytes` is at least `size` bytes long and outlives the call.
     unsafe {
         GetTokenInformation(
             token,
@@ -152,10 +164,16 @@ fn user_token(process: HANDLE) -> Result<Vec<usize>> {
     Ok(bytes)
 }
 fn validate_process(pid: u32) -> Result<()> {
+    // SAFETY: no pointers are passed; a pid that is gone is an error.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)? };
+    // SAFETY: `OpenProcess` succeeded, so this is a handle nobody else owns.
     let process = unsafe { OwnedHandle::from_raw_handle(process.0) };
     let peer = user_token(HANDLE(process.as_raw_handle()))?;
+    // SAFETY: returns a pseudo-handle that needs no closing and cannot fail.
     let own = user_token(unsafe { GetCurrentProcess() })?;
+    // SAFETY: `user_token` filled both buffers with a `TOKEN_USER`, aligned
+    // for it, and the SIDs they point to live inside those same buffers,
+    // which outlive the comparison.
     unsafe {
         let peer = &*peer.as_ptr().cast::<TOKEN_USER>();
         let own = &*own.as_ptr().cast::<TOKEN_USER>();
@@ -165,12 +183,18 @@ fn validate_process(pid: u32) -> Result<()> {
     Ok(())
 }
 fn create(first: bool, path: &Path) -> Result<NamedPipeServer> {
+    // SAFETY: returns a pseudo-handle that needs no closing and cannot fail.
     let token = user_token(unsafe { GetCurrentProcess() })?;
     let mut sid = PWSTR::null();
+    // SAFETY: `token` holds an aligned `TOKEN_USER` whose SID lives in the
+    // same buffer; `sid` receives a string the system allocates.
     unsafe {
         ConvertSidToStringSidW((&*token.as_ptr().cast::<TOKEN_USER>()).User.Sid, &mut sid)?;
     }
+    // SAFETY: the call above succeeded, so `sid` is a NUL-terminated string.
     let sid_text = unsafe { sid.to_string() };
+    // SAFETY: `sid` was allocated by the system for us and is not used again;
+    // `sid_text` is a copy. The return value only repeats the pointer on failure.
     unsafe {
         let _ = LocalFree(Some(HLOCAL(sid.0.cast())));
     }
@@ -179,6 +203,8 @@ fn create(first: bool, path: &Path) -> Result<NamedPipeServer> {
         .chain(Some(0))
         .collect();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `sddl` is NUL-terminated and outlives the call; `descriptor`
+    // receives a buffer the system allocates.
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             PCWSTR(sddl.as_ptr()),
@@ -192,12 +218,16 @@ fn create(first: bool, path: &Path) -> Result<NamedPipeServer> {
         lpSecurityDescriptor: descriptor.0,
         bInheritHandle: false.into(),
     };
+    // SAFETY: `attributes` and the descriptor it points to are valid until
+    // after this call, which copies what it needs.
     let result = unsafe {
         ServerOptions::new()
             .first_pipe_instance(first)
             .reject_remote_clients(true)
             .create_with_security_attributes_raw(path, &attributes as *const _ as *mut c_void)
     };
+    // SAFETY: the descriptor was allocated by the system for us and the pipe
+    // keeps its own copy.
     unsafe {
         let _ = LocalFree(Some(HLOCAL(descriptor.0)));
     }
@@ -206,6 +236,8 @@ fn create(first: bool, path: &Path) -> Result<NamedPipeServer> {
 pub async fn connect(path: &Path) -> Result<Stream> {
     let stream = ClientOptions::new().open(path)?;
     let mut pid = 0;
+    // SAFETY: `stream` owns the handle for the whole call and `pid` is a live
+    // out-parameter.
     unsafe {
         GetNamedPipeServerProcessId(HANDLE(stream.as_raw_handle()), &mut pid)?;
     }

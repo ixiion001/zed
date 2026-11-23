@@ -54,6 +54,7 @@ impl Drop for Listener {
     }
 }
 fn uid() -> u32 {
+    // SAFETY: takes no arguments and cannot fail.
     unsafe { libc::geteuid() }
 }
 fn validate_directory(path: &Path) -> Result<()> {
@@ -150,6 +151,7 @@ pub async fn connect_or_bind(home: &Path) -> Result<(Option<Listener>, Stream, E
     if !meta.is_file() || meta.uid() != uid() || meta.mode() & 0o077 != 0 {
         bail!("unsafe Codex election lock");
     }
+    // SAFETY: `lock` is an open file for the whole call.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         bail!("Codex router election in progress");
     }

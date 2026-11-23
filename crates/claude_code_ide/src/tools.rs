@@ -690,6 +690,24 @@ impl Dispatcher for WorkspaceDispatcher {
             other => Err(ProtocolError::method_not_found(other)),
         }
     }
+
+    /// The CLI learns the selection only from pushes, and the next one comes
+    /// when the cursor moves. Without this, a session started on an existing
+    /// selection shows none until then.
+    fn initialized(&self) -> Option<String> {
+        let mut cx = self.cx.clone();
+        let params = self
+            .workspace
+            .update(&mut cx, |workspace, cx| {
+                let editor = workspace.active_item_as::<Editor>(cx)?;
+                Some(selection_payload(&editor, cx))
+            })
+            .ok()
+            .flatten()?;
+        let notification =
+            json!({ "jsonrpc": "2.0", "method": "selection_changed", "params": params });
+        Some(notification.to_string())
+    }
 }
 
 /// Wraps a tool's payload in the MCP result envelope: the payload is

@@ -92,6 +92,12 @@ pub trait Dispatcher {
     /// Execute a `tools/call`. `Ok` is the MCP result object (typically
     /// `{"content": [{"type": "text", "text": "<json>"}]}`).
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, ProtocolError>;
+
+    /// A notification to send once the client reports that it is initialized,
+    /// which is the first moment it is listening for any.
+    fn initialized(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Binds a fresh WebSocket listener on the loopback interface, letting the OS
@@ -255,10 +261,10 @@ pub async fn handle_message<D: Dispatcher>(raw: &str, dispatcher: &D) -> Option<
             }
         }),
         // A notification: fire-and-forget, no response.
-        None => {
-            // `notifications/initialized` and friends need no action yet.
-            None
-        }
+        None => match method {
+            "notifications/initialized" => dispatcher.initialized(),
+            _ => None,
+        },
     }
 }
 
@@ -389,6 +395,26 @@ mod tests {
             &MockDispatcher,
         ));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn initialized_is_answered_with_the_dispatchers_greeting() {
+        struct Greeting;
+        impl Dispatcher for Greeting {
+            fn tools(&self) -> Vec<ToolDescriptor> {
+                Vec::new()
+            }
+            async fn call_tool(&self, name: &str, _: Value) -> Result<Value, ProtocolError> {
+                Err(ProtocolError::method_not_found(name))
+            }
+            fn initialized(&self) -> Option<String> {
+                Some("greeting".to_owned())
+            }
+        }
+        let ready = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        assert_eq!(block_on(handle_message(ready, &Greeting)).as_deref(), Some("greeting"));
+        let other = r#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#;
+        assert!(block_on(handle_message(other, &Greeting)).is_none());
     }
 
     #[test]

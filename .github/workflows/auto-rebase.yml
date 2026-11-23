@@ -1,30 +1,45 @@
-# Watches upstream Zed for a new stable release and rebases this fork's patch
-# series onto it, weekly.
+# Keeps this fork's patch series on the newest stable Zed and released, weekly,
+# without anyone having to follow up.
 #
 # The point of the fork is a patch that stays current. Zed ships roughly weekly,
 # and doing this by hand means noticing the release, rebasing, and discovering
 # any API break during a two-hour build. This does the noticing and the
 # discovering, and stops the moment anything looks wrong.
 #
-# When the rebase, the crate check and the tests all pass, it tags the result,
-# which starts cc-release.yml: three platform builds, each guarding that its
-# artifact is a dev-channel build of the tagged commit, and a release that
-# promotes itself only when all three are green. The main line is never touched:
-# work happens on `auto/v<tag>`, which is disposable and force-pushed freely,
-# and adopting it onto `main-patched` stays a human act -- the issue this job
-# opens carries the recipe.
+# The job is driven by state, not by events, so a week that went wrong is simply
+# repaired by the next run:
 #
-# The branch and the tag are pushed with the CC_RELEASE_PAT secret (fine-grained,
-# contents:write *and workflows:write* on this repository only, **expires
-# 2027-08-30** -- expect the fallback below around then). The branch needs the
-# PAT as much as the tag does: upstream keeps changing files under
-# .github/workflows/, and GitHub refuses any push that carries such a change
-# from GITHUB_TOKEN, which has no `workflows` permission to grant -- the first
-# rebase onto v1.18.0 (2026-09-04) died exactly there, after a green check and
-# test. A tag pushed with GITHUB_TOKEN starts no workflow run either: GitHub
-# suppresses that so workflows cannot trigger each other in a loop. With the
-# secret absent or expired, every path ends at an issue with the manual tag
-# recipe instead, and nothing is built or shipped.
+#   - `main-patched` sits on an older upstream stable -> rebase the series onto
+#     the new one, check and test the crate, **move `main-patched` to the
+#     result**, and tag it, which starts cc-release.yml.
+#   - `main-patched` already sits on the newest stable but no release exists for
+#     it -> check, test and tag it again. This covers a release build that went
+#     red, a runner that never picked the job up, and a conflict the maintainer
+#     resolved by hand and pushed to `main-patched`.
+#   - a release exists, or one is building -> nothing to do, in seconds.
+#
+# Moving `main-patched` used to be a manual step, described in an issue the job
+# opened. It was skipped for six weeks in autumn 2026 while releases were cut by
+# hand from `auto/*` branches, and the job then replayed the stale series every
+# Monday into a conflict that had long been resolved elsewhere (issue #6). There
+# is one series now, it lives on `main-patched`, and the job keeps it there. The
+# tip it replaces is archived as `auto/<old base tag>` first, and the move uses
+# a lease, so a commit pushed while the job ran makes it fail rather than vanish.
+#
+# Issues are opened only for what needs a human: a rebase conflict, a crate that
+# no longer compiles or passes its tests, a push GitHub refused, or a release
+# that failed three times. Success is silent.
+#
+# Every push uses the CC_RELEASE_PAT secret (fine-grained, contents:write *and
+# workflows:write* on this repository only, **expires 2027-08-30** -- expect the
+# fallback below around then). The branch needs the PAT as much as the tag does:
+# upstream keeps changing files under .github/workflows/, and GitHub refuses any
+# push that carries such a change from GITHUB_TOKEN, which has no `workflows`
+# permission to grant -- the first rebase onto v1.18.0 (2026-09-04) died exactly
+# there, after a green check and test. A tag pushed with GITHUB_TOKEN starts no
+# workflow run either: GitHub suppresses that so workflows cannot trigger each
+# other in a loop. With the secret absent or expired, every path ends at an
+# issue with the manual recipe instead, and nothing is built or shipped.
 #
 # Note on the heredocs below: their terminators sit at the *base* indentation of
 # the `run:` block, not the indentation of the surrounding `if`. YAML strips the
@@ -64,15 +79,15 @@ on:
         default: ""
 
 # Naming any scope sets the rest to none, so all are explicit: `contents` to
-# push the auto branch, `issues` to report what happened, `actions` to disable
-# upstream workflows (last step).
+# push, `issues` to report what needs a human, `actions` to see whether a
+# release is already building and to disable upstream workflows (last step).
 permissions:
   contents: write
   issues: write
   actions: write
 
 # A rebase plus a full crate build runs over an hour. Two racing would fight over
-# the same auto branch for no benefit.
+# the same branch for no benefit.
 concurrency:
   group: auto-rebase
   cancel-in-progress: false
@@ -81,6 +96,9 @@ env:
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: 1
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # A release that keeps failing is a defect, not bad luck. After this many tags
+  # for one upstream version without a release, stop and ask.
+  MAX_RELEASE_ATTEMPTS: "3"
 
 jobs:
   rebase:
@@ -102,7 +120,7 @@ jobs:
           # GH_TOKEN and is unaffected. Fetches here are from public repos.
           persist-credentials: false
 
-      - name: Work out where we are and where upstream is
+      - name: Work out where we are and what is missing
         id: target
         env:
           GH_TOKEN: ${{ github.token }}
@@ -138,32 +156,96 @@ jobs:
 
           base=$(git describe --tags --match 'v*' --abbrev=0)
 
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "new=$new" >> "$GITHUB_OUTPUT"
+          {
+            echo "base=$base"
+            echo "new=$new"
+            # The lease for moving main-patched later: the move goes through only
+            # if the branch is still where this job found it.
+            echo "start=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "current base : $base"
             echo "upstream     : $new"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-          if [ "$base" = "$new" ]; then
-            echo "already-current=true" >> "$GITHUB_OUTPUT"
-            echo "Already on the newest stable release; nothing to do." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "already-current=false" >> "$GITHUB_OUTPUT"
+          decide() {
+            echo "mode=$1" >> "$GITHUB_OUTPUT"
+            echo "$2" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "$base" != "$new" ]; then
+            decide rebase "Rebasing the series from $base onto $new."
+            exit 0
           fi
 
-      # Every later step carries this guard. The common weekly case is that
-      # upstream has not shipped, and that case must cost seconds rather than an
-      # hour of runner time.
+          # On the newest stable already. Whether that is the end of it depends
+          # on a release existing, which is what the maintainer actually wants.
+          #
+          # Any release object counts, prerelease included: cc-release creates
+          # one only after all three platforms are green, so its existence means
+          # the build worked, and a release the maintainer demoted on purpose
+          # must not be rebuilt behind their back.
+          released=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name | startswith(\"cc-$new-\")) | .tag_name" | sed -n 1p)
+          if [ -n "$released" ]; then
+            decide none "Already on $new and released as $released; nothing to do."
+            exit 0
+          fi
+
+          # A tag pushed minutes ago has no release yet either. cc-release takes
+          # 3-4 h, so "no release" only means failure once no run is in flight.
+          building=$(gh run list --workflow cc-release.yml --limit 50 \
+            --json status,headBranch \
+            --jq "[.[] | select(.status != \"completed\") | select(.headBranch | startswith(\"cc-$new-\"))] | length")
+          if [ "$building" != "0" ]; then
+            decide none "Already on $new and its release is building; nothing to do."
+            exit 0
+          fi
+
+          # --refs drops the peeled `^{}` line an annotated tag would add, which
+          # would count every tag twice.
+          attempts=$(git ls-remote --tags --refs origin "refs/tags/cc-$new-*" | grep -c . || true)
+          if [ "$attempts" -ge "$MAX_RELEASE_ATTEMPTS" ]; then
+            title="auto-rebase: $new failed to release $attempts times"
+            if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
+              cat > issue.md <<BODY
+          \`main-patched\` sits on upstream \`$new\` and has been tagged
+          $attempts times (\`cc-$new-1\` .. \`cc-$new-$attempts\`), but
+          [cc-release](../../actions/workflows/cc-release.yml) has not produced a
+          release from any of them. The weekly job has stopped retrying.
+
+          Read the newest failed cc-release run, fix what it names on
+          \`main-patched\`, then tag by hand:
+
+          \`\`\`
+          git fetch fork && git checkout main-patched && git reset --hard fork/main-patched
+          git tag -a cc-$new-$((attempts + 1)) -m "Zed ${new#v} + Claude Code IDE"
+          git push fork cc-$new-$((attempts + 1))
+          \`\`\`
+
+          (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
+          the others. Use whichever points at ixiion001/zed.)
+          BODY
+              url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
+              echo "$url"
+              gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
+            fi
+            decide none "Already on $new, but $attempts release attempts failed; see the open issue."
+            exit 1
+          fi
+
+          decide release "Already on $new but it has no release ($attempts earlier attempts); testing and tagging it."
+
+      # Every later step carries a guard on the mode. The common weekly case is
+      # that upstream has not shipped, and that case must cost seconds rather
+      # than an hour of runner time.
       - name: Rebase the patch series
         id: rebase
-        if: steps.target.outputs.already-current == 'false'
+        if: steps.target.outputs.mode == 'rebase'
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ steps.target.outputs.base }}
           NEW: ${{ steps.target.outputs.new }}
-          CC_RELEASE_PAT: ${{ secrets.CC_RELEASE_PAT }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -188,13 +270,25 @@ jobs:
           # is unaffected, and the worktree is discarded when the job ends.
           git config core.symlinks false
 
-          git checkout -b "auto/$NEW"
-
           # --onto replays only our commits: everything after the old upstream
           # tag, replanted on the new one. Rebasing against the branch instead
           # would try to replay upstream's own commits onto themselves.
           if git rebase --onto "$NEW" "$BASE"; then
-            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            # .github/README.md names the base tag in its compare links and its
+            # `git fetch zed tag` line. The guard on a preceding `-` keeps the
+            # changelog's own `cc-v1.2.3-1` release names as they were.
+            pattern="(^|[^-])${BASE//./\\.}"
+            sed -i -E "s/$pattern/\1$NEW/g" .github/README.md
+            if ! git diff --quiet -- .github/README.md; then
+              git add .github/README.md
+              # One such commit at the tip, rewritten each time, rather than one
+              # more per upstream release for the rest of the series' life.
+              if git log -1 --format=%s | grep -q '^docs: Point the base tag at '; then
+                git commit -q --amend -m "docs: Point the base tag at $NEW"
+              else
+                git commit -q -m "docs: Point the base tag at $NEW"
+              fi
+            fi
             exit 0
           fi
 
@@ -214,7 +308,7 @@ jobs:
 
           cat > issue.md <<BODY
           Rebasing this fork's patch series from \`$BASE\` onto \`$NEW\` hit
-          conflicts, so nothing was built and no branch was pushed.
+          conflicts, so nothing was built and \`main-patched\` was not moved.
 
           Conflicting files:
 
@@ -222,17 +316,25 @@ jobs:
 
           The patch is one new crate plus a 43-line graft into existing Zed code,
           and only the graft can realistically conflict, so the file list usually
-          names the fix. To resolve locally:
+          names the fix. Resolve it locally and push the result **to
+          \`main-patched\` itself**:
 
           \`\`\`
-          git fetch fork && git fetch upstream --tags
-          git checkout -b auto/$NEW main-patched
+          git fetch fork main-patched && git fetch --no-tags upstream tag $NEW
+          git checkout main-patched && git reset --hard fork/main-patched
           git rebase --onto $NEW $BASE
+          # resolve, git rebase --continue
+          git push --force-with-lease fork main-patched
           \`\`\`
 
-          Re-run [auto-rebase](../../actions/workflows/auto-rebase.yml) once
-          \`main-patched\` moves, or leave this open -- the weekly run will not
-          open a second copy.
+          That is all. The next weekly run -- or a manual run of
+          [auto-rebase](../../actions/workflows/auto-rebase.yml) -- finds
+          \`main-patched\` on \`$NEW\` without a release, tests it, and tags it.
+          Do not park the result on an \`auto/*\` branch: the job only ever reads
+          \`main-patched\`, and a fix it cannot see is a conflict it meets again.
+
+          (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
+          the others. Use whichever points at ixiion001/zed.)
           BODY
           # Created without --label, then labelled separately. `gh issue create`
           # resolves label names through GraphQL, which can lag the REST write
@@ -246,11 +348,11 @@ jobs:
           exit 1
 
       - name: Install Linux build dependencies
-        if: steps.target.outputs.already-current == 'false'
+        if: steps.target.outputs.mode == 'rebase' || steps.target.outputs.mode == 'release'
         run: ./script/linux
 
       - uses: Swatinem/rust-cache@v2
-        if: steps.target.outputs.already-current == 'false'
+        if: steps.target.outputs.mode == 'rebase' || steps.target.outputs.mode == 'release'
         with:
           # Deliberately shared with the release workflow's Linux leg: both
           # compile the same dependency graph, and a cold cache turns this job
@@ -263,7 +365,7 @@ jobs:
       # a full test build.
       - name: Check the crate against the new Zed
         id: check
-        if: steps.target.outputs.already-current == 'false'
+        if: steps.target.outputs.mode == 'rebase' || steps.target.outputs.mode == 'release'
         run: |
           # Without pipefail the step takes tee's exit status, so a failing check
           # would report success and this gate would pass everything through.
@@ -272,15 +374,15 @@ jobs:
 
       - name: Test the crate
         id: test
-        if: steps.target.outputs.already-current == 'false'
+        if: steps.target.outputs.mode == 'rebase' || steps.target.outputs.mode == 'release'
         run: |
           set -o pipefail
           cargo test --package claude_code_ide -- --nocapture 2>&1 | tee test.log
 
-      # `failure()` alone would also fire for a rebase conflict, which has
-      # already opened its own issue; the guard keeps the two reports separate.
+      # Keyed on these two steps' own outcomes: `failure()` alone would also
+      # fire for a rebase conflict, which has already opened its own issue.
       - name: Report a build or test failure
-        if: failure() && steps.rebase.outputs.conflict == 'false'
+        if: failure() && (steps.check.outcome == 'failure' || steps.test.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ steps.target.outputs.base }}
@@ -307,8 +409,9 @@ jobs:
           fi
 
           cat > issue.md <<BODY
-          The patch series rebased cleanly from \`$BASE\` onto \`$NEW\`, but
-          \`$stage\` failed, so nothing was pushed or built.
+          The patch series (previous base \`$BASE\`) applies to \`$NEW\`, but
+          \`$stage\` failed, so \`main-patched\` was not moved and nothing was
+          tagged or built.
 
           This is what the job exists to catch: upstream changed an API the
           \`claude_code_ide\` crate uses, and the editor would not have compiled.
@@ -318,6 +421,9 @@ jobs:
           \`\`\`
 
           Full log: [run ${{ github.run_id }}](../../actions/runs/${{ github.run_id }}).
+
+          Fix it on \`main-patched\` -- rebased onto \`$NEW\` if it is not there
+          yet -- and push. The next run tests it again and tags it.
           BODY
           # Created without --label, then labelled separately. `gh issue create`
           # resolves label names through GraphQL, which can lag the REST write
@@ -329,157 +435,138 @@ jobs:
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
 
-      - name: Push the branch and ask for a release
-        if: success() && steps.target.outputs.already-current == 'false'
+      - name: Move main-patched and tag the release
+        if: success() && (steps.target.outputs.mode == 'rebase' || steps.target.outputs.mode == 'release')
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.target.outputs.mode }}
           BASE: ${{ steps.target.outputs.base }}
           NEW: ${{ steps.target.outputs.new }}
-          # Read here, not only in the rebase step: this is the step that tags.
-          # Declared on the wrong step, the tag path silently took the "secret
-          # absent" branch and asked for a manual tag every time.
+          START: ${{ steps.target.outputs.start }}
+          # Read here, not only where it was first needed: this is the step that
+          # pushes. Declared on the wrong step, the tag path silently took the
+          # "secret absent" branch and asked for a manual tag every time.
           CC_RELEASE_PAT: ${{ secrets.CC_RELEASE_PAT }}
         run: |
           set -euo pipefail
-          # auto/* branches are scratch space, so a re-run replaces one freely.
-          # The main line is never force-pushed.
-          #
-          # Pushed with the PAT when there is one: the replayed series carries
-          # upstream's own changes under .github/workflows/, which GITHUB_TOKEN
-          # is never allowed to write (see the header). Actions masks the secret
-          # in logs; the issue body below redacts it by hand.
           # Nothing is persisted in git's config (see the checkout step), so
-          # each push names its token in the URL; without a PAT that is the job
-          # token, which fails only when upstream touched a workflow file.
+          # each push names its token in the URL. The PAT when there is one: the
+          # replayed series carries upstream's own changes under
+          # .github/workflows/, which GITHUB_TOKEN is never allowed to write
+          # (see the header). Actions masks the secret in logs; the issue body
+          # below redacts it by hand.
           if [ -n "${CC_RELEASE_PAT:-}" ]; then
             push_to="https://x-access-token:${CC_RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           else
             push_to="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
-          if ! git push --force "$push_to" "auto/$NEW" 2> push.err; then
+
+          report_refused_push() {
             sed 's#x-access-token:[^@]*@#x-access-token:***@#' push.err >&2
-            title="auto-rebase: cannot push auto/$NEW"
+            title="auto-rebase: cannot move main-patched to $NEW"
             if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
               cat > issue.md <<BODY
           The series rebased cleanly from \`$BASE\` onto \`$NEW\` and passed
-          \`cargo check\` and \`cargo test\`, but pushing \`auto/$NEW\` was refused,
-          so nothing was tagged or built:
+          \`cargo check\` and \`cargo test\`, but the push was refused, so
+          \`main-patched\` was not moved and nothing was tagged or built:
 
           \`\`\`
           $(sed 's#x-access-token:[^@]*@#x-access-token:***@#' push.err)
           \`\`\`
 
-          The usual cause: upstream changed files under \`.github/workflows/\`
-          between \`$BASE\` and \`$NEW\`, and the token doing the push may not
-          write workflow files. \`GITHUB_TOKEN\` never can. \`CC_RELEASE_PAT\` can
-          once the token has the repository permission **Workflows: read and
-          write** next to **Contents: read and write**. Fix the token, then re-run
-          [auto-rebase](../../actions/workflows/auto-rebase.yml).
+          Two usual causes:
+
+          - **\`stale info\`**: someone pushed to \`main-patched\` while the job
+            ran. Nothing is lost and nothing needs doing; the next run starts
+            from the new tip.
+          - **a workflow-file refusal**: upstream changed files under
+            \`.github/workflows/\` between \`$BASE\` and \`$NEW\`, and the token
+            doing the push may not write workflow files. \`GITHUB_TOKEN\` never
+            can. \`CC_RELEASE_PAT\` can once the token has the repository
+            permission **Workflows: read and write** next to **Contents: read
+            and write**, and has not expired. Fix the secret, then re-run
+            [auto-rebase](../../actions/workflows/auto-rebase.yml).
           BODY
               url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
               echo "$url"
               gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
             fi
             exit 1
-          fi
+          }
 
-          # One open issue per target version. This also keeps a re-run, or next
-          # week's cron firing before last week's branch was adopted, from
-          # tagging and building the same rebase twice.
-          if [ -n "$(gh issue list --state open --search "in:title \"$NEW\"" --json number --jq '.[0].number // empty')" ]; then
-            echo "an open issue already covers $NEW" && exit 0
+          if [ "$MODE" = "rebase" ]; then
+            # The tip being replaced, kept reachable under the base it sat on.
+            # auto/* branches are scratch space and are overwritten freely.
+            git push --force "$push_to" "$START:refs/heads/auto/$BASE" 2> push.err || report_refused_push
+
+            # The lease names the commit this job checked out, so a commit
+            # someone pushed meanwhile makes this fail instead of disappear.
+            # Spelled out in full because a URL remote has no tracking ref for
+            # a bare --force-with-lease to compare against.
+            git push "--force-with-lease=refs/heads/main-patched:$START" "$push_to" \
+              "HEAD:refs/heads/main-patched" 2> push.err || report_refused_push
+            echo "main-patched moved from $BASE to $NEW; the old tip is auto/$BASE." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
           # Suffix rule: n = 1 + how many cc-<version>-* tags exist, counted on
           # the remote rather than in this clone, so a retry can never reuse a
-          # number that already has a release attached to it.
-          n=$(( $(git ls-remote --tags origin "refs/tags/cc-$NEW-*" | grep -c . || true) + 1 ))
+          # number that already has a build attached to it.
+          n=$(( $(git ls-remote --tags --refs origin "refs/tags/cc-$NEW-*" | grep -c . || true) + 1 ))
           tag="cc-$NEW-$n"
 
           if [ -n "${CC_RELEASE_PAT:-}" ]; then
             # A tag pushed with GITHUB_TOKEN starts nothing -- GitHub suppresses
             # workflow triggers from that token to prevent loops -- so the tag
-            # goes up with the fine-grained PAT instead. Actions masks the
-            # secret in logs.
+            # goes up with the fine-grained PAT instead.
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag -a "$tag" -m "Zed ${NEW#v} + Claude Code IDE"
-            git push "https://x-access-token:${CC_RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag"
+            git push "$push_to" "refs/tags/$tag"
+            echo "Tagged $tag; cc-release is building it and promotes it to /releases/latest when all three platforms are green." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
-            title="auto-rebase: $tag is building"
-            cat > issue.md <<BODY
-          \`auto/$NEW\` -- this fork's series rebased from \`$BASE\` onto
-          upstream \`$NEW\` -- compiles, passes its tests, and has been tagged
-          \`$tag\`. [cc-release](../../actions/workflows/cc-release.yml) is
-          building it now. If every platform leg and its channel guard is green,
-          the release **promotes itself to \`/releases/latest\`** and every
-          machine picks it up on its next updater run; if anything is red,
-          nothing is published at all.
-
-          What stays manual is adopting the branch, once the release is out:
-          BODY
-          else
-            title="auto-rebase: $NEW is ready to release"
-            cat > issue.md <<BODY
-          \`auto/$NEW\` carries this fork's patch series rebased from \`$BASE\`
-          onto upstream \`$NEW\`. It compiles and its tests pass.
+          title="auto-rebase: $NEW is ready to release"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
+            echo "issue already open" && exit 1
+          fi
+          cat > issue.md <<BODY
+          \`main-patched\` carries this fork's patch series on upstream
+          \`$NEW\`. It compiles and its tests pass.
 
           Nothing has been built: the \`CC_RELEASE_PAT\` secret is not set (or
           has expired), and a tag pushed with \`GITHUB_TOKEN\` starts no
-          workflow. Either restore the secret and re-run this job, or tag by
-          hand:
+          workflow. Restore the secret and the next run tags it, or tag by hand:
 
           \`\`\`
-          git fetch fork
-          git checkout auto/$NEW
+          git fetch fork && git checkout main-patched && git reset --hard fork/main-patched
           git tag -a $tag -m "Zed ${NEW#v} + Claude Code IDE"
           git push fork $tag
           \`\`\`
 
           That starts [cc-release](../../actions/workflows/cc-release.yml),
           which builds all three platforms and, when every leg's channel guard
-          passes, publishes and promotes the release itself. Then adopt the
-          branch:
-          BODY
-          fi
-
-          cat >> issue.md <<BODY
-
-          \`\`\`
-          git checkout main-patched && git reset --hard auto/$NEW
-          git push --force-with-lease fork main-patched
-          \`\`\`
-
-          Adopting is a **reset, not a merge**. \`auto/$NEW\` is this series
-          replayed onto a new base, so its commits are new objects and
-          \`main-patched\` is not an ancestor of it -- \`merge --ff-only\`
-          cannot work. That force-push rewrites the branch every other clone is
-          sitting on, so tell the other machines before you run it; each one
-          recovers with \`git fetch && git reset --hard <remote>/main-patched\`,
-          never \`git pull\`.
-
-          Finally, \`.github/README.md\` names the base tag in its compare link
-          and its \`git fetch zed tag\` line. Point both at \`$NEW\`.
+          passes, publishes and promotes the release itself.
 
           (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
           the others. Use whichever points at ixiion001/zed.)
           BODY
-          # Created without --label, then labelled separately. `gh issue create`
-          # resolves label names through GraphQL, which can lag the REST write
-          # that creates the label by a few seconds -- and did, the first time
-          # this job ran: the label existed, the lookup said it did not, and the
-          # whole report was lost. On these paths the issue is the only thing the
-          # job produces, so nothing cosmetic is allowed to be able to sink it.
           url=$(gh api "repos/$GITHUB_REPOSITORY/issues" -f title="$title" -F body=@issue.md --jq .html_url)
           echo "$url"
           gh issue edit "$url" --add-label auto-rebase >/dev/null 2>&1 || true
+          exit 1
 
       # Upstream's workflows are disabled in this fork: they skip on their
       # `repository_owner == 'zed-industries'` guards or need PRs, so they did no
       # work here, yet their schedules filled the run list -- the suspected
       # trigger of GitHub's fork usage flag (support ticket #4903811). A disabled
       # workflow stays disabled across rebases, but one upstream *adds* arrives
-      # active once a push registers it. Runs every week, rebase or not, so a
-      # workflow registered later (e.g. by adopting onto main-patched) is caught
-      # by the next run. Non-fatal: tidiness must never fail the job.
+      # active once a push registers it. Runs every week, rebase or not, and
+      # after the step that moves main-patched, so a workflow that move
+      # registers is caught in the same run. Non-fatal: tidiness must never fail
+      # the job.
       - name: Disable upstream workflows
         if: always()
         env:

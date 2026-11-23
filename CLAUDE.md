@@ -46,7 +46,7 @@ line** of conflict resolution — upstream's `chrono` landing next to our `claud
 | `main-patched` | **default branch and the live patch series.** v1.16.3 + commits. CI builds this |
 | `fix/windows-ide-integration` | PR #1 to `vitaly-andr/zed` — four upstream bug fixes. **Never add release infrastructure here**; it must stay reviewable |
 | `windows-ide-fixes` | tagged `fallback-1.6.0`, the known-good Zed 1.6.0 lineage. Left alone |
-| `auto/v<tag>` | created by the weekly auto-rebase job for inspection |
+| `auto/v<tag>` | the series as it last stood on that upstream tag, archived by the weekly auto-rebase job when it moves `main-patched` on. Scratch space: **the job never reads these**, so a fix parked here is invisible to it |
 
 ## CI layout
 
@@ -54,7 +54,7 @@ line** of conflict resolution — upstream's `chrono` landing next to our `claud
 |---|---|
 | `.github/workflows/cc-release.yml` | **ours.** Builds on `cc-v*` tags, publishes a prerelease |
 | `.github/workflows/claude-code-ide.yml` | **ours.** Tests the crate on three platforms |
-| `.github/workflows/auto-rebase.yml` | **ours.** Weekly: rebases onto each new upstream stable, checks and tests it, then opens an issue. Never publishes — see the note in its header on why a `GITHUB_TOKEN` tag push cannot start `cc-release` |
+| `.github/workflows/auto-rebase.yml` | **ours.** Weekly: rebases onto each new upstream stable, checks and tests it, **force-moves `main-patched` to the result** and tags it, which starts `cc-release`. Also re-tags a `main-patched` that is current but has no release. Opens an issue only when a human is needed. After a week with a new upstream release, every clone recovers with `git fetch && git reset --hard <remote>/main-patched`, never `git pull` |
 | `.github/workflows/release.yml` and every other file there | **upstream's — leave alone** |
 
 Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.16.3-1`. Push tags to **`fork`**; `origin` is

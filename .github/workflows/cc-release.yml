@@ -70,8 +70,8 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --release --package zed --package cli
 
-      # zed's build script downloads conpty and drops it beside the binary; the
-      # integrated terminal will not open without these two files.
+      # zed's build script normally downloads conpty and drops it beside the
+      # binary; the integrated terminal will not open without these two files.
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -94,6 +94,24 @@ jobs:
             }
           } else {
             Write-Output "::warning::could not read a commit out of '$version'; skipping the commit check"
+          }
+          # zed's build script fetches conpty on a best-effort basis: a download
+          # or extraction that fails is a cargo warning and the build stays
+          # green. cc-v1.29.3-1 lost its Windows leg here, two hours in, with
+          # the editor already built ("Failed to copy conpty.dll ... cannot find
+          # the path specified"). So when the two files are missing, fetch them
+          # here instead, from the URL the build script names -- read out of it
+          # rather than copied, so the version stays upstream's choice.
+          if (-not ((Test-Path "$rel/conpty.dll") -and (Test-Path "$rel/OpenConsole.exe"))) {
+            $match = Select-String -Path crates/zed/build.rs -Pattern 'let conpty_url = "([^"]+)"'
+            if (-not $match) {
+              throw "the build left no conpty.dll, and crates/zed/build.rs no longer names a conpty_url to fetch it from"
+            }
+            $url = $match.Matches[0].Groups[1].Value
+            Write-Output "::warning::the build script left no conpty.dll or OpenConsole.exe; fetching $url"
+            Invoke-WebRequest -Uri $url -OutFile conpty.nupkg.zip -MaximumRetryCount 3 -RetryIntervalSec 15
+            Expand-Archive -Path conpty.nupkg.zip -DestinationPath conpty -Force
+            Copy-Item "conpty/runtimes/win-x64/native/conpty.dll","conpty/build/native/runtimes/x64/OpenConsole.exe" "$rel/"
           }
           New-Item -ItemType Directory -Force -Path staging | Out-Null
           Copy-Item "$rel/zed.exe","$rel/cli.exe","$rel/conpty.dll","$rel/OpenConsole.exe" staging/

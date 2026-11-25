@@ -7,16 +7,22 @@ use crate::editor_context::{bounded_text, local_abs_path, utf16_range};
 use crate::open_diff::{PendingDiffs, open_diff};
 use crate::server::{Dispatcher, ProtocolError, ToolDescriptor, error_codes};
 use editor::Editor;
-use futures::future::join_all;
+use futures::{
+    StreamExt as _,
+    channel::mpsc,
+    future::{Either, join_all, select},
+};
 use gpui::{AnyWindowHandle, App, AsyncApp, Entity, WeakEntity};
 use language::{Buffer, DiagnosticSeverity};
-use project::ProjectPath;
+use project::{ProjectPath, lsp_store::OpenLspBufferHandle};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    cell::RefCell,
+    collections::{BTreeSet, VecDeque},
     ops::Range,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use text::Point;
 use workspace::{OpenOptions, Workspace};
@@ -32,6 +38,22 @@ pub struct WorkspaceDispatcher {
     cx: AsyncApp,
     /// The `openDiff` requests this connection is waiting on; see [`PendingDiffs`].
     pending: PendingDiffs,
+    /// Files this connection asked about that had no editor; see [`WatchedFile`].
+    watched: RefCell<VecDeque<WatchedFile>>,
+}
+
+/// A file `getDiagnostics` was asked about by `uri` while nothing in Zed had
+/// it open.
+///
+/// Most language servers analyse only the documents an editor has opened with
+/// them, so a file the CLI edits on disk has no diagnostics at all until it
+/// is registered the way an editor would register it. The registration lasts
+/// as long as this handle, and the buffer has to stay loaded with it: the CLI
+/// asks again after each edit, and by then the server must already have seen
+/// the change. Both end with the connection.
+struct WatchedFile {
+    _buffer: Entity<Buffer>,
+    _registration: OpenLspBufferHandle,
 }
 
 impl WorkspaceDispatcher {
@@ -40,7 +62,13 @@ impl WorkspaceDispatcher {
         window: Option<AnyWindowHandle>,
         cx: AsyncApp,
     ) -> Self {
-        Self { workspace, window, cx, pending: PendingDiffs::default() }
+        Self {
+            workspace,
+            window,
+            cx,
+            pending: PendingDiffs::default(),
+            watched: RefCell::new(VecDeque::new()),
+        }
     }
 
     fn get_current_selection(&self, cx: &mut AsyncApp) -> Result<Value, ProtocolError> {
@@ -162,10 +190,23 @@ impl WorkspaceDispatcher {
         // loaded, so load -- without a tab -- the file asked for, or else the
         // files known to have any. A file the CLI has just edited is often not
         // open here, and it would otherwise always look clean.
-        let loading = self
+        let (loading, unwatched) = self
             .workspace
             .update(cx, |workspace, cx| {
-                workspace.project().update(cx, |project, cx| {
+                // A file already loaded is either in an editor, which registered
+                // it, or watched by this connection.
+                let unwatched = target.as_ref().and_then(|target| {
+                    let is_loaded = open_buffers(workspace, cx).iter().any(|buffer| {
+                        local_abs_path(buffer.read(cx), cx)
+                            .is_some_and(|open| same_path(&open, target))
+                    });
+                    if is_loaded {
+                        None
+                    } else {
+                        workspace.project().read(cx).find_project_path(target, cx)
+                    }
+                });
+                let loading = workspace.project().update(cx, |project, cx| {
                     let paths: BTreeSet<ProjectPath> = match &target {
                         Some(target) => project.find_project_path(target, cx).into_iter().collect(),
                         None => project
@@ -178,12 +219,19 @@ impl WorkspaceDispatcher {
                         .take(UNOPENED_DIAGNOSTIC_FILES_LIMIT)
                         .map(|path| project.open_buffer(path, cx))
                         .collect::<Vec<_>>()
-                })
+                });
+                (loading, unwatched)
             })
             .map_err(|error| ProtocolError::internal(error.to_string()))?;
         // Held until the reply is built, then released again. A file that no
         // longer loads has nothing to report and is not an error of this call.
         let loaded = join_all(loading).await;
+
+        if let Some(path) = unwatched
+            && let Some(Ok(buffer)) = loaded.first()
+        {
+            self.watch(buffer.clone(), path, cx).await?;
+        }
 
         let files = self
             .workspace
@@ -229,6 +277,55 @@ impl WorkspaceDispatcher {
         drop(loaded);
 
         Ok(mcp_text(Value::Array(files)))
+    }
+
+    /// Registers a file nobody has open with its language servers, and gives
+    /// them a moment to report on it before the first answer goes out.
+    async fn watch(
+        &self,
+        buffer: Entity<Buffer>,
+        path: ProjectPath,
+        cx: &mut AsyncApp,
+    ) -> Result<(), ProtocolError> {
+        let (updates_tx, mut updates_rx) = mpsc::unbounded();
+        let (registration, subscription) = self
+            .workspace
+            .update(cx, |workspace, cx| {
+                let project = workspace.project().clone();
+                let subscription = cx.subscribe(&project, move |_, _, event, _| {
+                    if let project::Event::DiagnosticsUpdated { paths, .. } = event
+                        && paths.contains(&path)
+                    {
+                        // Nobody is listening once the wait below is over.
+                        updates_tx.unbounded_send(()).ok();
+                    }
+                });
+                let registration = project.update(cx, |project, cx| {
+                    project.register_buffer_with_language_servers(&buffer, cx)
+                });
+                (registration, subscription)
+            })
+            .map_err(|error| ProtocolError::internal(error.to_string()))?;
+
+        {
+            let mut watched = self.watched.borrow_mut();
+            if watched.len() == WATCHED_FILES_LIMIT {
+                watched.pop_front();
+            }
+            watched.push_back(WatchedFile { _buffer: buffer, _registration: registration });
+        }
+
+        // A server says nothing about a file it finds clean, so silence cannot
+        // be told from an analysis still running, and the wait has to be
+        // bounded. Later calls find the file registered and do not wait.
+        let executor = cx.background_executor().clone();
+        let deadline = executor.timer(FIRST_ANALYSIS_WAIT);
+        if let Either::Left(_) = select(updates_rx.next(), deadline).await {
+            // Several servers may cover one file; let the others catch up.
+            executor.timer(FURTHER_SERVERS_WAIT).await;
+        }
+        drop(subscription);
+        Ok(())
     }
 
     fn check_document_dirty(
@@ -336,6 +433,21 @@ impl WorkspaceDispatcher {
 /// disk for the reply, so a project with errors everywhere must not turn one
 /// question into thousands of file loads.
 const UNOPENED_DIAGNOSTIC_FILES_LIMIT: usize = 50;
+
+/// How many files one connection keeps registered with language servers on
+/// the CLI's behalf; the oldest is released first. Each is a loaded buffer and
+/// an open document in every server for its language.
+const WATCHED_FILES_LIMIT: usize = 32;
+
+/// How long the first `getDiagnostics` for a file nobody has open waits for a
+/// language server to report on it. A running server answers well within
+/// this; one that has to start first does not, and the next call picks up
+/// what it reported in the meantime.
+const FIRST_ANALYSIS_WAIT: Duration = Duration::from_secs(3);
+
+/// After the first server has reported on such a file, how long to wait for
+/// any other server covering it.
+const FURTHER_SERVERS_WAIT: Duration = Duration::from_millis(300);
 
 /// Selected text beyond this many bytes is cut short, with a note saying so.
 /// The CLI repeats the selection into the model's context with every prompt

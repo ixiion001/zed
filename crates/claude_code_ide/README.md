@@ -66,7 +66,7 @@ Entry point: `claude_code_ide::init(cx)`, called from `crates/zed/src/main.rs`.
 | `getCurrentSelection` / `getLatestSelection` | Active editor selection (for `@`-mentions). |
 | `getWorkspaceFolders` | Visible worktree roots. |
 | `getOpenEditors` | Open buffers with uri/label/language/dirty state. |
-| `getDiagnostics` | Language diagnostics for one uri, or for every open buffer plus up to 50 files that are not open but known to have some. |
+| `getDiagnostics` | Language diagnostics for one uri, or for every open buffer plus up to 50 files that are not open but known to have some. A uri nobody has open is registered with its language servers, as an editor would, for as long as that CLI stays connected (32 files at most); the first answer waits up to 3 s for them. |
 | `openFile` | Open a path, optionally selecting a line range. |
 | `saveDocument` / `checkDocumentDirty` | Save a buffer / query its dirty state. |
 | `openDiff` | Blocking side-by-side diff with Keep/Reject. |
@@ -99,4 +99,7 @@ Edit a file through Claude and a Keep/Reject diff opens in the editor.
 - Keep/Reject hotkeys are intentionally omitted; use the notification buttons.
 - Zed 1.18+ starts no language server in a folder you have not marked as trusted, so
   `getDiagnostics` for its files stays empty until you accept Zed's trust prompt.
+- The first `getDiagnostics` for a file with no tab can start a language server. One that
+  takes longer than 3 s to start answers empty that once; the CLI's next question gets
+  what it reported in the meantime.
 

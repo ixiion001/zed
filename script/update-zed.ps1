@@ -169,8 +169,15 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # removing earlier entries, leaving the install half-updated and unlaunchable.
 #
 # Stage the archive instead and move files in one at a time.
+#
+# Unpacked through .NET, not Expand-Archive: on a Windows PowerShell 5.1 whose
+# Microsoft.PowerShell.Archive module does not match its .NET, the cmdlet dies
+# with 'Cannot find an overload for "ExtractToDirectory"'. The two-argument
+# overload used here exists in every .NET either PowerShell runs on.
 $staging = Join-Path $temp 'staging'
-Expand-Archive $zip -DestinationPath $staging -Force
+if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $staging)
 
 $stamp = if ($installed) { $installed.Substring(0, 10) } else { 'unknown' }
 foreach ($file in Get-ChildItem $staging -File) {

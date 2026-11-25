@@ -16,7 +16,12 @@
 #     it -> check, test and tag it again. This covers a release build that went
 #     red, a runner that never picked the job up, and a conflict the maintainer
 #     resolved by hand and pushed to `main-patched`.
-#   - a release exists, or one is building -> nothing to do, in seconds.
+#   - a release exists, but `main-patched` has since changed in something that
+#     goes into the build -> check, test and tag it too. A fix merged into
+#     `main-patched` therefore ships within a week without a hand-pushed tag,
+#     and anything not meant to ship has to stay on a branch.
+#   - the release matches `main-patched`, or one is building -> nothing to do,
+#     in seconds.
 #
 # Moving `main-patched` used to be a manual step, described in an issue the job
 # opened. It was skipped for six weeks in autumn 2026 while releases were cut by
@@ -102,7 +107,7 @@ env:
   # open?" search had been looking there too. Pinned for the whole job.
   GH_REPO: ${{ github.repository }}
   # A release that keeps failing is a defect, not bad luck. After this many tags
-  # for one upstream version without a release, stop and ask.
+  # in a row for one upstream version without a release, stop and ask.
   MAX_RELEASE_ATTEMPTS: "3"
 
 jobs:
@@ -190,11 +195,32 @@ jobs:
           # one only after all three platforms are green, so its existence means
           # the build worked, and a release the maintainer demoted on purpose
           # must not be rebuilt behind their back.
+          #
+          # The newest of them is the one with the highest build number, which
+          # is the third dash-separated field of cc-v1.2.3-4.
           released=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq ".[] | select(.tag_name | startswith(\"cc-$new-\")) | .tag_name" | sed -n 1p)
+            --jq ".[] | select(.tag_name | startswith(\"cc-$new-\")) | .tag_name" \
+            | sort -t- -k3 -n | tail -n 1)
+          released_number=0
+          why="it has no release"
           if [ -n "$released" ]; then
-            decide none "Already on $new and released as $released; nothing to do."
-            exit 0
+            # A release exists, but it may no longer be what main-patched holds:
+            # a fix merged since then would otherwise wait, unreleased, until
+            # upstream ships or someone remembers to tag it. Only what goes into
+            # the build counts. Workflows, documentation and the updater script
+            # are read from the repository, not from a release, and must not
+            # cost three platform builds.
+            if ! git fetch --no-tags origin "refs/tags/$released:refs/tags/$released" 2>/dev/null; then
+              decide none "Already on $new and released as $released (whose tag is gone, so main-patched cannot be compared with it); nothing to do."
+              exit 0
+            fi
+            if git diff --quiet "refs/tags/$released" HEAD -- . \
+                ':(exclude).github' ':(exclude)*.md' ':(exclude)script/update-zed.*'; then
+              decide none "Already on $new and released as $released; nothing to do."
+              exit 0
+            fi
+            released_number=${released##*-}
+            why="main-patched has changed since $released"
           fi
 
           # A tag pushed minutes ago has no release yet either. cc-release takes
@@ -209,23 +235,29 @@ jobs:
 
           # --refs drops the peeled `^{}` line an annotated tag would add, which
           # would count every tag twice.
-          attempts=$(git ls-remote --tags --refs origin "refs/tags/cc-$new-*" | grep -c . || true)
+          # Only tags newer than the last release are failed attempts; the ones
+          # up to it built, and a version that is released several times must
+          # not run into the limit by succeeding.
+          total=$(git ls-remote --tags --refs origin "refs/tags/cc-$new-*" | grep -c . || true)
+          attempts=$(git ls-remote --tags --refs origin "refs/tags/cc-$new-*" \
+            | sed -n "s#.*refs/tags/cc-$new-##p" \
+            | awk -v last="$released_number" '$1 + 0 > last + 0' | grep -c . || true)
           if [ "$attempts" -ge "$MAX_RELEASE_ATTEMPTS" ]; then
             title="auto-rebase: $new failed to release $attempts times"
             if [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')" ]; then
               cat > issue.md <<BODY
-          \`main-patched\` sits on upstream \`$new\` and has been tagged
-          $attempts times (\`cc-$new-1\` .. \`cc-$new-$attempts\`), but
-          [cc-release](../../actions/workflows/cc-release.yml) has not produced a
-          release from any of them. The weekly job has stopped retrying.
+          \`main-patched\` sits on upstream \`$new\`, and $why. Its last
+          $attempts tags (up to \`cc-$new-$total\`) were built by
+          [cc-release](../../actions/workflows/cc-release.yml) without producing
+          a release. The weekly job has stopped retrying.
 
           Read the newest failed cc-release run, fix what it names on
           \`main-patched\`, then tag by hand:
 
           \`\`\`
           git fetch fork && git checkout main-patched && git reset --hard fork/main-patched
-          git tag -a cc-$new-$((attempts + 1)) -m "Zed ${new#v} + Claude Code IDE"
-          git push fork cc-$new-$((attempts + 1))
+          git tag -a cc-$new-$((total + 1)) -m "Zed ${new#v} + Claude Code IDE"
+          git push fork cc-$new-$((total + 1))
           \`\`\`
 
           (\`fork\` is the remote name on the Windows clone; it is \`origin\` on
@@ -239,7 +271,7 @@ jobs:
             exit 1
           fi
 
-          decide release "Already on $new but it has no release ($attempts earlier attempts); testing and tagging it."
+          decide release "Already on $new, but $why ($attempts failed attempts); testing and tagging it."
 
       # Every later step carries a guard on the mode. The common weekly case is
       # that upstream has not shipped, and that case must cost seconds rather

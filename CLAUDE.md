@@ -68,12 +68,13 @@ own build did not.
 |---|---|
 | `.github/workflows/cc-release.yml` | **ours.** Builds all three platforms on `cc-v*` tags (3–4 h, macOS the long pole). Publishes only if every leg and its channel guard is green, then promotes the release to `/releases/latest` |
 | `.github/workflows/claude-code-ide.yml` | **ours.** Tests the crate on three platforms |
-| `.github/workflows/auto-rebase.yml` | **ours.** Weekly: rebases onto each new upstream stable, checks and tests it, **force-moves `main-patched` to the result** and tags it, which starts `cc-release`. Also re-tags a `main-patched` that is current but has no release. Opens an issue only when a human is needed. After a week with a new upstream release, every clone recovers with `git fetch && git reset --hard <remote>/main-patched`, never `git pull` |
+| `.github/workflows/auto-rebase.yml` | **ours.** Weekly: rebases onto each new upstream stable, checks and tests it, **force-moves `main-patched` to the result** and tags it, which starts `cc-release`. Also re-tags a `main-patched` that is current but has no release, **and one whose source has changed since its last release** — so whatever is merged into `main-patched` ships within a week, and unfinished work stays on a branch (changes confined to `.github/`, `*.md` and `script/update-zed.*` do not trigger a release). Opens an issue only when a human is needed. After a week with a new upstream release, every clone recovers with `git fetch && git reset --hard <remote>/main-patched`, never `git pull` |
 | `.github/workflows/heartbeat.yml` | **ours.** Does nothing; an external check dispatches it to detect GitHub switching Actions off on the fork. Keep it enabled |
 | `.github/workflows/release.yml` and every other file there | **upstream's — leave alone.** They are disabled in this fork, and auto-rebase disables any new one upstream adds |
 
 Releases are tagged `cc-v<upstream>-<n>`, e.g. `cc-v1.29.3-1`; `n` counts tags for that upstream
-version, so a retry never reuses a number. Push to the remote that points at `ixiion001/zed` — it is
+version, so a retry never reuses a number. A fix that cannot wait for Monday is released by pushing
+the next tag by hand. Push to the remote that points at `ixiion001/zed` — it is
 `fork` on the Windows clone, where `origin` is `vitaly-andr/zed` and `git push --tags` would put our
 tags on someone else's repository.
 
